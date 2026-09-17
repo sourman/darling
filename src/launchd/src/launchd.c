@@ -160,7 +160,7 @@ main(int argc, char *const *argv)
 		}
 	}
 
-	if (getpid() != 1 && getppid() != 1) {
+	if (getpid() != 1 && getppid() != 1 && !getenv("DARLING_BOOTSTRAP_RESTORE")) {
 		fprintf(stderr, "%s: This program is not meant to be run directly.\n", getprogname());
 		exit(EXIT_FAILURE);
 	}
@@ -256,22 +256,35 @@ main(int argc, char *const *argv)
 		ipc_server_init();
 		launchd_log_push();
 
-		auditinfo_addr_t auinfo;
-		if (posix_assumes_zero(getaudit_addr(&auinfo, sizeof(auinfo))) != -1) {
-			launchd_audit_session = auinfo.ai_asid;
-			launchd_syslog(LOG_DEBUG, "Our audit session ID is %i", launchd_audit_session);
+		if (!getenv("DARLING_BOOTSTRAP_RESTORE")) {
+			auditinfo_addr_t auinfo;
+			if (posix_assumes_zero(getaudit_addr(&auinfo, sizeof(auinfo))) != -1) {
+				launchd_audit_session = auinfo.ai_asid;
+				launchd_syslog(LOG_DEBUG, "Our audit session ID is %i", launchd_audit_session);
+			}
+
+			launchd_audit_port = _audit_session_self();
+
+			vproc_transaction_begin(NULL);
+			vproc_transaction_end(NULL, NULL);
+		} else {
+			fprintf(stderr, "bootstrap_restore_v1 standalone launchd pid=%d ppid=%d\n", getpid(), getppid());
+			fflush(stderr);
 		}
-
-		launchd_audit_port = _audit_session_self();
-
-		vproc_transaction_begin(NULL);
-		vproc_transaction_end(NULL, NULL);
 
 		launchd_syslog(LOG_DEBUG, "Per-user launchd started (UID/username): %u/%s.", launchd_uid, launchd_username);
 	}
 
 	monitor_networking_state();
+	if (getenv("DARLING_BOOTSTRAP_RESTORE")) {
+		fprintf(stderr, "bootstrap_restore_v1 calling jobmgr_init\n");
+		fflush(stderr);
+	}
 	jobmgr_init(sflag);
+	if (getenv("DARLING_BOOTSTRAP_RESTORE")) {
+		fprintf(stderr, "bootstrap_restore_v1 jobmgr_init done, entering runtime\n");
+		fflush(stderr);
+	}
 
 	launchd_runtime_init2();
 	launchd_runtime();

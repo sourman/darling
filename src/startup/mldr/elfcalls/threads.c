@@ -67,6 +67,7 @@ struct arg_struct
 	uintptr_t stack_bottom;
 	uintptr_t stack_addr;
 	bool is_workqueue;
+	int rpc_fd;
 };
 
 static void* darling_thread_entry(void* p);
@@ -159,6 +160,7 @@ void* __darling_thread_create(unsigned long stack_size, unsigned long pth_obj_si
 		.callbacks        = callbacks,
 		.stack_addr       = 0, // set later on
 		.is_workqueue     = real_entry_point == 0, // our `workq_kernreturn` sets `real_entry_point` to NULL; `bsdthread_create` actually passes a value
+		.rpc_fd           = -1,
 	};
 	pthread_attr_t attr;
 	pthread_t nativeLibcThread;
@@ -193,7 +195,19 @@ void* __darling_thread_create(unsigned long stack_size, unsigned long pth_obj_si
 	//pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
 	args.pth = pth;
-	pthread_create(&nativeLibcThread, &attr, darling_thread_entry, &args);
+
+	// Seed the child's darlingserver RPC socket the same way mldr seeds the
+	// main thread, before the child can run Darwin code (or checkin).
+	args.rpc_fd = __mldr_create_rpc_socket();
+	if (args.rpc_fd < 0) {
+		fprintf(stderr, "Failed to create socket\n");
+		abort();
+	}
+
+	if (pthread_create(&nativeLibcThread, &attr, darling_thread_entry, &args) != 0) {
+		__mldr_close_rpc_socket(args.rpc_fd);
+		abort();
+	}
 	pthread_attr_destroy(&attr);
 
 	while (args.pth != NULL)
@@ -212,8 +226,11 @@ static void* darling_thread_entry(void* p)
 	dthread_t dthread = args.pth;
 	uintptr_t* flags = args.is_workqueue ? &args.arg2 : &args.arg3;
 
-	// create a new dserver RPC socket
-	int new_rpc_fd = __mldr_create_rpc_socket();
+	// Use the RPC socket created for this child (same path as the main thread).
+	int new_rpc_fd = args.rpc_fd;
+	if (new_rpc_fd < 0) {
+		new_rpc_fd = __mldr_create_rpc_socket();
+	}
 	if (new_rpc_fd < 0) {
 		// we can't do anything if we don't get our own separate connection to darlingserver
 		fprintf(stderr, "Failed to create socket\n");
@@ -227,12 +244,10 @@ static void* darling_thread_entry(void* p)
 	t_server_socket = new_rpc_fd;
 	t_callbacks = args.callbacks;
 
-	// libpthread now expects the kernel to set the TSD
-	// so, since we're pretending to be the kernel handling threads...
-	args.callbacks->thread_set_tsd_base(&dthread->tsd[0], 0);
-	*flags |= args.is_workqueue ? DWQ_FLAG_THREAD_TSD_BASE_SET : DTHREAD_START_TSD_BASE_SET;
-
-	// let's check-in with darlingserver on this new thread
+	// Linux clone copies GS, so TSD slot 3 would otherwise keep the parent's
+	// Mach thread port until pthread overwrites it. Publish this thread's
+	// port into the *child* pthread object, then ARCH_SET_GS to that object,
+	// before any Darwin os_unfair_lock / malloc.
 	int dummy_stack_variable;
 	// the lifetime pipe fd is ignored as the process should already have been registered
 	if (dserver_rpc_explicit_checkin(t_server_socket, false, &dummy_stack_variable, -1) < 0) {
@@ -243,6 +258,9 @@ static void* darling_thread_entry(void* p)
 	int thread_self_port = args.callbacks->thread_self_trap();
 	dthread->tsd[DTHREAD_TSD_SLOT_MACH_THREAD_SELF] = (void*)(intptr_t)thread_self_port;
 	args.port = thread_self_port;
+
+	args.callbacks->thread_set_tsd_base(&dthread->tsd[0], 0);
+	*flags |= args.is_workqueue ? DWQ_FLAG_THREAD_TSD_BASE_SET : DTHREAD_START_TSD_BASE_SET;
 
 	in_args->pth = NULL;
 
@@ -382,13 +400,21 @@ void* __darling_thread_get_stack(void)
 extern int __dserver_main_thread_socket_fd;
 
 int __darling_thread_rpc_socket(void) {
-	if (t_server_socket == -1) {
-		if (getpid() == syscall(SYS_gettid)) {
+	if (t_server_socket < 0) {
+		if (getpid() == syscall(SYS_gettid) && __dserver_main_thread_socket_fd >= 0) {
 			// this is the main thread
 			t_server_socket = __dserver_main_thread_socket_fd;
 		} else {
-			// threads should already have a per-thread socket assigned when they're created
-			abort();
+			// Threads created outside darling_thread_entry still need a
+			// real RPC fd before dserver_rpc_checkin / mach_driver_get_fd.
+			int new_rpc_fd = __mldr_create_rpc_socket();
+			if (new_rpc_fd < 0) {
+				return -1;
+			}
+			if (t_callbacks != NULL) {
+				t_callbacks->rpc_guard(new_rpc_fd);
+			}
+			t_server_socket = new_rpc_fd;
 		}
 	}
 	return t_server_socket;

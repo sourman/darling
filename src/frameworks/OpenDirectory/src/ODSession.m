@@ -23,14 +23,57 @@
 
 @implementation ODSession
 
++ (ODSession *)defaultSession
+{
+	static ODSession *shared = nil;
+	if (shared == nil)
+		shared = [[ODSession alloc] init];
+	return shared;
+}
+
++ (instancetype)sessionWithOptions:(NSDictionary *)options error:(NSError **)error
+{
+	if (error)
+		*error = nil;
+	return [self defaultSession];
+}
+
+- (instancetype)initWithOptions:(NSDictionary *)options error:(NSError **)error
+{
+	if (error)
+		*error = nil;
+	return [self init];
+}
+
+- (NSArray *)nodeNamesAndReturnError:(NSError **)error
+{
+	if (error)
+		*error = nil;
+	return [NSArray array];
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+{
+	return [NSMethodSignature signatureWithObjCTypes: "@@:"];
+}
+
++ (void)forwardInvocation:(NSInvocation *)anInvocation
+{
+	NSLog(@"Stub called: +%@ in %@", NSStringFromSelector([anInvocation selector]), self);
+	id ret = nil;
+	[anInvocation setReturnValue:&ret];
+}
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
-    return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+	return [NSMethodSignature signatureWithObjCTypes: "@@:"];
 }
 
 - (void)forwardInvocation:(NSInvocation *)anInvocation
 {
-    NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	id ret = nil;
+	[anInvocation setReturnValue:&ret];
 }
 
 @end

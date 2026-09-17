@@ -18,6 +18,7 @@ add_framework(Network
     VERSION ${FRAMEWORK_VERSION}
 
     SOURCES
+    	src/extra_comet_stubs.m
         src/Network.m
         src/NWAWDLibnetcoreMPTCPStatsReport.m
         src/NWSystemPathMonitor.m

@@ -18,6 +18,7 @@ add_framework(UserNotifications
 	VERSION ${FRAMEWORK_VERSION}
 
 	SOURCES
+		src/extra_comet_stubs.m
 		src/UserNotifications.m
 		src/UNLocalizedStringFactory.m
 		src/UNNotificationTrigger.m

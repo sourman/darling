@@ -20,6 +20,7 @@ add_framework(OpenDirectory
     VERSION ${FRAMEWORK_OPENDIRECTORY_VERSION}
 
     SOURCES
+    	src/extra_comet_stubs.m
         src/OpenDirectory.m
         src/NSODSession.m
         src/ODSession.m

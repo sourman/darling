@@ -20,9 +20,11 @@ add_framework(Accelerate
     VERSION ${FRAMEWORK_VERSION}
 
     SOURCES
+    	src/extra_comet_stubs.m
         src/Accelerate.c
 
     DEPENDENCIES
+		objc
         system
 )
 

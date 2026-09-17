@@ -18,6 +18,7 @@ add_framework(MediaAccessibility
     VERSION ${FRAMEWORK_VERSION}
 
     SOURCES
+        src/extra_comet_stubs.c
         src/MediaAccessibility.c
 
     DEPENDENCIES

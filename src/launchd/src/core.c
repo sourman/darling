@@ -1729,6 +1729,11 @@ job_new_anonymous(jobmgr_t jm, pid_t anonpid)
 		return NULL;
 	}
 
+#ifdef DARLING
+	/* Linux host PIDs routinely exceed XNU PID_MAX (99999). Darling guest
+	 * processes in the host PID namespace must still become anonymous jobs
+	 * so bootstrap_check_in can run. */
+#else
 	if (anonpid >= 100000) {
 		/* The kernel current defines PID_MAX to be 99999, but that define isn't
 		 * exported.
@@ -1737,15 +1742,22 @@ job_new_anonymous(jobmgr_t jm, pid_t anonpid)
 		errno = EINVAL;
 		return NULL;
 	}
+#endif
 
 	/* libproc returns the number of bytes written into the buffer upon success,
 	 * zero on failure. I'd much rather it return -1 on failure, like sysctl(3).
 	 */
+	memset(&proc, 0, sizeof(proc));
 	if (proc_pidinfo(anonpid, PROC_PIDT_SHORTBSDINFO, 1, &proc, PROC_PIDT_SHORTBSDINFO_SIZE) == 0) {
+#ifdef DARLING
+		snprintf(proc.pbsi_comm, sizeof(proc.pbsi_comm), "pid.%d", anonpid);
+		proc.pbsi_pid = anonpid;
+#else
 		if (errno != ESRCH) {
 			(void)jobmgr_assumes_zero(jm, errno);
 		}
 		return NULL;
+#endif
 	}
 
 	if (proc.pbsi_comm[0] == '\0') {
@@ -3353,11 +3365,38 @@ job_t
 jobmgr_find_by_pid(jobmgr_t jm, pid_t p, bool create_anon)
 {
 	job_t ji;
+	job_t anon = NULL;
+
+#ifdef DARLING
+	/* KeepAlive children must check_in as the plist job (ms->job), never as a
+	 * new anonymous job. Search managed jobs and every session before creating
+	 * an anonymous hijacker. Marker is greppable in the binary. */
+	static const char job_identity_v1[] = "job_identity_v1";
+	(void)job_identity_v1;
+
+	ji = managed_job(p);
+	if (ji) {
+		return ji;
+	}
+	if (root_jobmgr) {
+		ji = jobmgr_find_by_pid_deep(root_jobmgr, p, false);
+		if (ji) {
+			return ji;
+		}
+	}
+#endif
 
 	LIST_FOREACH(ji, &jm->active_jobs[ACTIVE_JOB_HASH(p)], pid_hash_sle) {
 		if (ji->p == p) {
-			return ji;
+			if (!ji->anonymous) {
+				return ji;
+			}
+			anon = ji;
 		}
+	}
+
+	if (anon) {
+		return anon;
 	}
 
 	return create_anon ? job_new_anonymous(jm, p) : NULL;
@@ -3368,7 +3407,7 @@ managed_job(pid_t p)
 {
 	job_t ji;
 
-	LIST_FOREACH(ji, &managed_actives[ACTIVE_JOB_HASH(p)], pid_hash_sle) {
+	LIST_FOREACH(ji, &managed_actives[ACTIVE_JOB_HASH(p)], global_pid_hash_sle) {
 		if (ji->p == p) {
 			return ji;
 		}
@@ -3685,8 +3724,10 @@ job_reap(job_t j)
 	}
 
 	LIST_REMOVE(j, pid_hash_sle);
-	if (!j->anonymous) {
+	if (!j->anonymous && j->global_pid_hash_sle.le_prev != NULL) {
 		LIST_REMOVE(j, global_pid_hash_sle);
+		j->global_pid_hash_sle.le_prev = NULL;
+		j->global_pid_hash_sle.le_next = NULL;
 	}
 
 	if (j->sent_signal_time) {
@@ -4439,13 +4480,21 @@ job_start(job_t j)
 		}
 		break;
 	case 0:
+#ifndef DARLING
 		if (unlikely(_vproc_post_fork_ping())) {
 			_exit(EXIT_FAILURE);
 		}
+#endif
 
 		(void)job_assumes_zero(j, runtime_close(execspair[0]));
 		// wait for our parent to say they've attached a kevent to us
 		read(_fd(execspair[1]), &c, sizeof(c));
+#ifdef DARLING
+		/* Parent has recorded j->p. Ping as that job so check_in matches ms->job. */
+		if (unlikely(_vproc_post_fork_ping())) {
+			_exit(EXIT_FAILURE);
+		}
+#endif
 
 		if (sipc) {
 			(void)job_assumes_zero(j, runtime_close(spair[0]));
@@ -4503,6 +4552,59 @@ job_start(job_t j)
 			(void)job_assumes_zero(j, runtime_close(spair[1]));
 			ipc_open(_fd(spair[0]), j);
 		}
+#if HAVE_SYSTEMSTATS
+		if (systemstats_is_enabled()) {
+			/* We don't really *need* to make the full rusage call -- it
+			 * will be mostly 0s and very small numbers. We only need
+			 * ri_proc_start_abstime, because that's how we disambiguiate
+			 * PIDs when they wrap around; and the UUID.
+			 * In the future we should use the 64-bit process unique ID,
+			 * so there's nothing to disambiguiate, and skip the full
+			 * rusage call here.
+			 *
+			 * Well, the future is now.
+			 */
+			if (_systemstats_get_property(SYSTEMSTATS_API_VERSION, SYSTEMSTATS_WRITER_launchd, SYSTEMSTATS_PROPERTY_LAUNCHD_SHOULD_LOG_JOB_START)) {
+				job_log_perf_statistics(j, NULL, -3);
+			}
+		}
+#endif
+		j->wait4debugger_oneshot = false;
+#ifdef DARLING
+		/* Child is corked and invisible to dserver until _vproc_post_fork_ping.
+		 * kevent EVFILT_PROC before uncork is always ESRCH; reaping then drops
+		 * j->p and check_in runs as an anonymous hijacker (1100). Uncork first. */
+		if (likely(!j->stall_before_exec)) {
+			job_uncork_fork(j);
+		}
+		{
+			int kq_rc = -1;
+			int kq_tries;
+			int kq_errno = 0;
+
+			for (kq_tries = 0; kq_tries < 100; kq_tries++) {
+				kq_rc = kevent_mod(c, EVFILT_PROC, EV_ADD, proc_fflags, 0, root_jobmgr ? root_jobmgr : j->mgr);
+				if (kq_rc != -1) {
+					break;
+				}
+				kq_errno = errno;
+				if (kq_errno != ESRCH) {
+					break;
+				}
+				usleep(2000);
+			}
+			if (kq_rc != -1) {
+				job_ignore(j);
+			} else if (kill(c, 0) == 0 || errno == EPERM) {
+				job_log(j, LOG_NOTICE, "job_identity_v1 EVFILT_PROC deferred; keeping PID %u (%s)", c, strerror(kq_errno));
+				job_ignore(j);
+			} else {
+				job_log(j, LOG_ERR, "job_identity_v1 child vanished before kevent PID %u (%s)", c, strerror(kq_errno));
+				job_reap(j);
+				job_watch(j);
+			}
+		}
+#else
 		if (kevent_mod(c, EVFILT_PROC, EV_ADD, proc_fflags, 0, root_jobmgr ? root_jobmgr : j->mgr) != -1) {
 			job_ignore(j);
 		} else {
@@ -4522,28 +4624,10 @@ job_start(job_t j)
 			 */
 			job_watch(j);
 		}
-
-#if HAVE_SYSTEMSTATS
-		if (systemstats_is_enabled()) {
-			/* We don't really *need* to make the full rusage call -- it
-			 * will be mostly 0s and very small numbers. We only need
-			 * ri_proc_start_abstime, because that's how we disambiguiate
-			 * PIDs when they wrap around; and the UUID.
-			 * In the future we should use the 64-bit process unique ID,
-			 * so there's nothing to disambiguiate, and skip the full
-			 * rusage call here.
-			 *
-			 * Well, the future is now.
-			 */
-			if (_systemstats_get_property(SYSTEMSTATS_API_VERSION, SYSTEMSTATS_WRITER_launchd, SYSTEMSTATS_PROPERTY_LAUNCHD_SHOULD_LOG_JOB_START)) {
-				job_log_perf_statistics(j, NULL, -3);
-			}
-		}
-#endif
-		j->wait4debugger_oneshot = false;
 		if (likely(!j->stall_before_exec)) {
 			job_uncork_fork(j);
 		}
+#endif
 		break;
 	}
 }
@@ -6819,6 +6903,9 @@ job_uncork_fork(job_t j)
 {
 	pid_t c = j->p;
 
+	if (!j->fork_fd) {
+		return;
+	}
 	job_log(j, LOG_DEBUG, "Uncorking the fork().");
 	/* this unblocks the child and avoids a race
 	 * between the above fork() and the kevent_mod() */
@@ -6827,11 +6914,100 @@ job_uncork_fork(job_t j)
 	j->fork_fd = 0;
 }
 
+/* Darling: when pid-1 launchd's Mach bootstrap send-right is dead, a
+ * replacement launchd creates its own receive right (macOS pid1 path) and
+ * publishes it onto already-running tasks so bootstrap_check_in can register
+ * receive rights in that namespace. Marker is greppable in the binary. */
+static const char darling_bootstrap_restore_marker[] = "bootstrap_restore_v1";
+
+static void
+darling_retarget_one_task(pid_t pid, mach_port_t bootstrap_send, int *n)
+{
+	task_t task;
+
+	if (pid <= 0 || pid == getpid()) {
+		return;
+	}
+	if (task_for_pid(mach_task_self(), pid, &task) != KERN_SUCCESS) {
+		return;
+	}
+	if (task_set_special_port(task, TASK_BOOTSTRAP_PORT, bootstrap_send) == KERN_SUCCESS) {
+		(*n)++;
+	}
+	(void)mach_port_deallocate(mach_task_self(), task);
+}
+
+static void
+darling_retarget_task_bootstraps(mach_port_t bootstrap_send)
+{
+	const char *pidlist;
+	pid_t pid;
+	int n = 0;
+	int i;
+	int npids;
+	int bufsz;
+	pid_t *pids = NULL;
+
+	if (bootstrap_send == MACH_PORT_NULL || bootstrap_send == MACH_PORT_DEAD) {
+		return;
+	}
+
+	/* Existing tasks still hold a send right to the dead pid-1 launchd.
+	 * Comet look_up then returns MACH_SEND_INVALID_DEST (0x10000003).
+	 * Publish this job manager as TASK_BOOTSTRAP_PORT for every live task
+	 * so new forks (darling shell / shellspawn) inherit a live namespace. */
+	bufsz = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
+	if (bufsz > 0) {
+		pids = malloc((size_t)bufsz);
+	}
+	if (pids) {
+		npids = proc_listpids(PROC_ALL_PIDS, 0, pids, bufsz);
+		if (npids > 0) {
+			npids /= (int)sizeof(pid_t);
+			for (i = 0; i < npids; i++) {
+				darling_retarget_one_task(pids[i], bootstrap_send, &n);
+			}
+		}
+		free(pids);
+	}
+	if (n == 0) {
+		/* Darling proc_listpids is unimplemented (sys_proc_info callnum 1). */
+		for (pid = 1; pid < 100000; pid++) {
+			if (kill(pid, 0) != 0 && errno != EPERM) {
+				continue;
+			}
+			darling_retarget_one_task(pid, bootstrap_send, &n);
+		}
+	}
+
+	pid = getppid();
+	darling_retarget_one_task(pid, bootstrap_send, &n);
+
+	pidlist = getenv("DARLING_RETARGET_PIDS");
+	if (pidlist && pidlist[0]) {
+		char *copy = strdup(pidlist);
+		char *tok;
+		char *save = NULL;
+
+		if (copy) {
+			for (tok = strtok_r(copy, ", ", &save); tok; tok = strtok_r(NULL, ", ", &save)) {
+				pid = (pid_t)strtol(tok, NULL, 10);
+				darling_retarget_one_task(pid, bootstrap_send, &n);
+			}
+			free(copy);
+		}
+	}
+
+	fprintf(stderr, "bootstrap_restore_v1 retargeted %d tasks jm_port=0x%x\n", n, bootstrap_send);
+	fflush(stderr);
+}
+
 jobmgr_t 
 jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bool sflag, const char *name, bool skip_init, mach_port_t asport)
 {
 	job_t bootstrapper = NULL;
 	jobmgr_t jmr;
+	bool restore_root_bootstrap = false;
 
 	__OS_COMPILETIME_ASSERT__(offsetof(struct jobmgr_s, kqjobmgr_callback) == 0);
 
@@ -6869,31 +7045,47 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 	} else if (!jm && !pid1_magic) {
 		char *trusted_fd = getenv(LAUNCHD_TRUSTED_FD_ENV);
 		name_t service_buf;
+		kern_return_t checkin_kr;
 
 		snprintf(service_buf, sizeof(service_buf), "com.apple.launchd.peruser.%u", getuid());
 
-		if (jobmgr_assumes_zero(jmr, bootstrap_check_in(bootstrap_port, service_buf, &jmr->jm_port)) != 0) {
-			goto out_bad;
-		}
+		checkin_kr = bootstrap_check_in(bootstrap_port, service_buf, &jmr->jm_port);
+		if (checkin_kr != 0) {
+			/*
+			 * Parent bootstrap port is a dead send-right (typical
+			 * MACH_SEND_INVALID_DEST / 0x10000003 after darlingserver
+			 * restart). Create a receive right the way pid 1 does and
+			 * become the bootstrap namespace for this prefix.
+			 */
+			if (jobmgr_assumes_zero(jmr, launchd_mport_create_recv(&jmr->jm_port)) != KERN_SUCCESS) {
+				goto out_bad;
+			}
+			if (launchd_mport_make_send(jmr->jm_port) == KERN_SUCCESS) {
+				(void)launchd_set_bport(jmr->jm_port);
+			}
+			restore_root_bootstrap = true;
+			jobmgr_log(jmr, LOG_NOTICE, "%s parent check_in failed (%s); created root bootstrap port",
+				darling_bootstrap_restore_marker, mach_error_string(checkin_kr));
+		} else {
+			if (trusted_fd) {
+				int dfd, lfd = (int) strtol(trusted_fd, NULL, 10);
 
-		if (trusted_fd) {
-			int dfd, lfd = (int) strtol(trusted_fd, NULL, 10);
+				if ((dfd = dup(lfd)) >= 0) {
+					(void)jobmgr_assumes_zero_p(jmr, runtime_close(dfd));
+					(void)jobmgr_assumes_zero_p(jmr, runtime_close(lfd));
+				}
 
-			if ((dfd = dup(lfd)) >= 0) {
-				(void)jobmgr_assumes_zero_p(jmr, runtime_close(dfd));
-				(void)jobmgr_assumes_zero_p(jmr, runtime_close(lfd));
+				unsetenv(LAUNCHD_TRUSTED_FD_ENV);
 			}
 
-			unsetenv(LAUNCHD_TRUSTED_FD_ENV);
+			// cut off the Libc cache, we don't want to deadlock against ourself
+			inherited_bootstrap_port = bootstrap_port;
+			bootstrap_port = MACH_PORT_NULL;
+			os_assert_zero(launchd_mport_notify_req(inherited_bootstrap_port, MACH_NOTIFY_DEAD_NAME));
+
+			// We set this explicitly as we start each child
+			os_assert_zero(launchd_set_bport(MACH_PORT_NULL));
 		}
-
-		// cut off the Libc cache, we don't want to deadlock against ourself
-		inherited_bootstrap_port = bootstrap_port;
-		bootstrap_port = MACH_PORT_NULL;
-		os_assert_zero(launchd_mport_notify_req(inherited_bootstrap_port, MACH_NOTIFY_DEAD_NAME));
-
-		// We set this explicitly as we start each child
-		os_assert_zero(launchd_set_bport(MACH_PORT_NULL));
 	} else if (jobmgr_assumes_zero(jmr, launchd_mport_create_recv(&jmr->jm_port)) != KERN_SUCCESS) {
 		goto out_bad;
 	}
@@ -6910,13 +7102,81 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(0, EVFILT_FS, EV_ADD, VQ_MOUNT|VQ_UNMOUNT|VQ_UPDATE, 0, jmr));
 	}
 
-	if (name && !skip_init) {
+	if (name && !skip_init && !restore_root_bootstrap) {
 		bootstrapper = jobmgr_init_session(jmr, name, sflag);
 	}
 
-	if (!bootstrapper || !bootstrapper->weird_bootstrap) {
+	if (!bootstrapper || !bootstrapper->weird_bootstrap || restore_root_bootstrap) {
 		if (jobmgr_assumes_zero(jmr, runtime_add_mport(jmr->jm_port, job_server)) != KERN_SUCCESS) {
 			goto out_bad;
+		}
+	}
+
+	if (restore_root_bootstrap) {
+		jmr->session_initialized = true;
+		darling_retarget_task_bootstraps(jmr->jm_port);
+		fprintf(stderr, "bootstrap_restore_v1 listening jm_port=0x%x retargeted\n", jmr->jm_port);
+		fflush(stderr);
+
+		/* Session init was skipped so launchctl bootstrap never ran. Import
+		 * iokitd in-process so KeepAlive forks it as this jobmgr's ms->job.
+		 * Do not spawn an anonymous launchctl child to load the plist. */
+		launch_data_t pl = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+		if (pl) {
+			launch_data_t args = launch_data_alloc(LAUNCH_DATA_ARRAY);
+			launch_data_t ms = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+			launch_data_t env = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+			launch_data_dict_insert(pl, launch_data_new_string("org.darlinghq.iokitd"), LAUNCH_JOBKEY_LABEL);
+			launch_data_array_set_index(args, launch_data_new_string("/usr/sbin/iokitd"), 0);
+			launch_data_dict_insert(pl, args, LAUNCH_JOBKEY_PROGRAMARGUMENTS);
+			launch_data_dict_insert(ms, launch_data_new_bool(true), "org.darlinghq.iokitd");
+			launch_data_dict_insert(ms, launch_data_new_bool(true), "com.apple.PowerManagement.control");
+			launch_data_dict_insert(pl, ms, LAUNCH_JOBKEY_MACHSERVICES);
+			launch_data_dict_insert(pl, launch_data_new_bool(true), LAUNCH_JOBKEY_KEEPALIVE);
+			launch_data_dict_insert(pl, launch_data_new_string("/tmp/iokitd.out"), LAUNCH_JOBKEY_STANDARDOUTPATH);
+			launch_data_dict_insert(pl, launch_data_new_string("/tmp/iokitd.err"), LAUNCH_JOBKEY_STANDARDERRORPATH);
+			launch_data_dict_insert(env, launch_data_new_string(":1"), "DISPLAY");
+			launch_data_dict_insert(env, launch_data_new_string("/tmp/xauth"), "XAUTHORITY");
+			launch_data_dict_insert(pl, env, LAUNCH_JOBKEY_ENVIRONMENTVARIABLES);
+			fprintf(stderr, "job_identity_v1 importing iokitd as plist job\n");
+			fflush(stderr);
+			job_t imported = job_import(pl);
+			if (imported) {
+				fprintf(stderr, "job_identity_v1 iokitd job=%s pid=%d anon=%d\n",
+					imported->label, imported->p, (int)imported->anonymous);
+			} else {
+				fprintf(stderr, "job_identity_v1 iokitd import failed errno=%d\n", errno);
+			}
+			fflush(stderr);
+
+			/* Chrome ThermalStateObserver look_up of notification_center.
+			 * Without this job, restore launchd either parks (forward) or
+			 * the client hangs on a stale send-right. Import notifyd as
+			 * the plist owner so check_in matches and _notify_server_checkin
+			 * gets a reply (or Chrome sees Result 9 if check_in fails). */
+			launch_data_t npl = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+			if (npl) {
+				launch_data_t nargs = launch_data_alloc(LAUNCH_DATA_ARRAY);
+				launch_data_t nms = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+				launch_data_dict_insert(npl, launch_data_new_string("com.apple.notifyd"), LAUNCH_JOBKEY_LABEL);
+				launch_data_array_set_index(nargs, launch_data_new_string("/usr/sbin/notifyd.darling"), 0);
+				launch_data_dict_insert(npl, nargs, LAUNCH_JOBKEY_PROGRAMARGUMENTS);
+				launch_data_dict_insert(nms, launch_data_new_bool(true), "com.apple.system.notification_center");
+				launch_data_dict_insert(npl, nms, LAUNCH_JOBKEY_MACHSERVICES);
+				launch_data_dict_insert(npl, launch_data_new_bool(true), LAUNCH_JOBKEY_KEEPALIVE);
+				launch_data_dict_insert(npl, launch_data_new_string("/tmp/notifyd.out"), LAUNCH_JOBKEY_STANDARDOUTPATH);
+				launch_data_dict_insert(npl, launch_data_new_string("/tmp/notifyd.err"), LAUNCH_JOBKEY_STANDARDERRORPATH);
+				fprintf(stderr, "job_identity_v1 importing notifyd as plist job\n");
+				fflush(stderr);
+				job_t nimported = job_import(npl);
+				if (nimported) {
+					fprintf(stderr, "job_identity_v1 notifyd job=%s pid=%d anon=%d\n",
+						nimported->label, nimported->p, (int)nimported->anonymous);
+				} else {
+					fprintf(stderr, "job_identity_v1 notifyd import failed errno=%d\n", errno);
+				}
+			}
+			fflush(stderr);
 		}
 	}
 
@@ -8951,6 +9211,10 @@ job_mig_check_in2(job_t j, name_t servicename, mach_port_t *serviceportp, uuid_t
 
 			if (last_warned_pid != ldc->pid) {
 				job_log(jo, LOG_WARNING, "The following job tried to hijack the service \"%s\" from this job: %s", servicename, j->label);
+#ifdef DARLING
+				job_log(j, LOG_WARNING, "job_identity_v1 check_in hijack service=%s caller=%s anon=%d caller_pid=%d owner=%s owner_pid=%d ldc_pid=%d",
+					servicename, j->label, (int)j->anonymous, j->p, jo->label, jo->p, ldc->pid);
+#endif
 				last_warned_pid = ldc->pid;
 			}
 
@@ -8966,6 +9230,11 @@ job_mig_check_in2(job_t j, name_t servicename, mach_port_t *serviceportp, uuid_t
 	machservice_request_notifications(ms);
 
 	job_log(j, LOG_INFO, "Check-in of service: %s", servicename);
+#ifdef DARLING
+	fprintf(stderr, "job_identity_v1 check_in ok service=%s job=%s anon=%d pid=%d port=0x%x\n",
+		servicename, j->label, (int)j->anonymous, j->p, machservice_port(ms));
+	fflush(stderr);
+#endif
 
 	*serviceportp = machservice_port(ms);
 	return BOOTSTRAP_SUCCESS;
@@ -9153,6 +9422,9 @@ job_mig_look_up2(job_t j, mach_port_t srp, name_t servicename, mach_port_t *serv
 	if (likely(ms)) {
 		(void)job_assumes(j, machservice_port(ms) != MACH_PORT_NULL);
 		job_log(j, LOG_DEBUG, "%sMach service lookup: %s", per_pid_lookup ? "Per PID " : "", servicename);
+		fprintf(stderr, "job_lookup_v1 name=%s kr=0 port=0x%x job=%s anon=%d\n",
+			servicename, machservice_port(ms), j->label ? j->label : "?", (int)j->anonymous);
+		fflush(stderr);
 		*serviceportp = machservice_port(ms);
 
 		kr = BOOTSTRAP_SUCCESS;
@@ -9162,15 +9434,21 @@ job_mig_look_up2(job_t j, mach_port_t srp, name_t servicename, mach_port_t *serv
 		 * won't forward. But if it is a privileged lookup, then we must
 		 * forward.
 		 */
+		fprintf(stderr, "job_lookup_v1 name=%s UNKNOWN strict\n", servicename);
+		fflush(stderr);
 		return BOOTSTRAP_UNKNOWN_SERVICE;
 	} else if (inherited_bootstrap_port != MACH_PORT_NULL) {
-		// Requests from within an XPC domain don't get forwarded.
-		job_log(j, LOG_DEBUG, "Mach service lookup forwarded: %s", servicename);
-		/* Clients potentially check the audit token of the reply to verify that
-		 * the returned send right is trustworthy.
+		/*
+		 * Darling: do not forward unknown names. Parent bootstrap is
+		 * often a dead send-right after restore; MIG_NO_REPLY parks
+		 * Chrome (notifyd look_up of notification_center) forever.
+		 * Fail fast like pid1 with no parent.
 		 */
-		(void)job_assumes_zero(j, vproc_mig_look_up2_forward(inherited_bootstrap_port, srp, servicename, target_pid, instance_id, flags));
-		return MIG_NO_REPLY;
+		fprintf(stderr, "job_lookup_v1 name=%s UNKNOWN (no forward inherited=0x%x)\n",
+			servicename, inherited_bootstrap_port);
+		fflush(stderr);
+		job_log(j, LOG_DEBUG, "Mach service lookup not forwarded: %s", servicename);
+		return BOOTSTRAP_UNKNOWN_SERVICE;
 	} else if (pid1_magic && j->anonymous && ldc->euid >= 500 && strcasecmp(j->mgr->name, VPROCMGR_SESSION_LOGINWINDOW) == 0) {
 		/* 5240036 Should start background session when a lookup of CCacheServer
 		 * occurs
@@ -9181,6 +9459,8 @@ job_mig_look_up2(job_t j, mach_port_t srp, name_t servicename, mach_port_t *serv
 		 */
 		return VPROC_ERR_TRY_PER_USER;
 	} else {
+		fprintf(stderr, "job_lookup_v1 name=%s UNKNOWN\n", servicename);
+		fflush(stderr);
 		job_log(j, LOG_DEBUG, "%sMach service lookup failed: %s", per_pid_lookup ? "Per PID " : "", servicename);
 		kr = BOOTSTRAP_UNKNOWN_SERVICE;
 	}

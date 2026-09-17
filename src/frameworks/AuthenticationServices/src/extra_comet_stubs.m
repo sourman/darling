@@ -1,0 +1,29 @@
+/* Auto-generated Comet compatibility stubs */
+#import <Foundation/NSObject.h>
+#import <Foundation/NSString.h>
+
+NSString *ASAuthorizationErrorDomain = @"ASAuthorizationErrorDomain";
+NSString *ASAuthorizationPublicKeyCredentialAttestationKindNone = @"ASAuthorizationPublicKeyCredentialAttestationKindNone";
+NSString *ASAuthorizationPublicKeyCredentialUserVerificationPreferenceDiscouraged = @"ASAuthorizationPublicKeyCredentialUserVerificationPreferenceDiscouraged";
+NSString *ASAuthorizationPublicKeyCredentialUserVerificationPreferencePreferred = @"ASAuthorizationPublicKeyCredentialUserVerificationPreferencePreferred";
+NSString *ASAuthorizationPublicKeyCredentialUserVerificationPreferenceRequired = @"ASAuthorizationPublicKeyCredentialUserVerificationPreferenceRequired";
+NSString *ASWebAuthenticationSessionErrorDomain = @"ASWebAuthenticationSessionErrorDomain";
+
+@interface ASAuthorizationPublicKeyCredentialLargeBlobAssertionInput : NSObject @end
+@implementation ASAuthorizationPublicKeyCredentialLargeBlobAssertionInput @end
+
+@interface ASAuthorizationPublicKeyCredentialLargeBlobRegistrationInput : NSObject @end
+@implementation ASAuthorizationPublicKeyCredentialLargeBlobRegistrationInput @end
+
+@interface ASAuthorizationPublicKeyCredentialPRFAssertionInput : NSObject @end
+@implementation ASAuthorizationPublicKeyCredentialPRFAssertionInput @end
+
+@interface ASAuthorizationPublicKeyCredentialPRFAssertionInputValues : NSObject @end
+@implementation ASAuthorizationPublicKeyCredentialPRFAssertionInputValues @end
+
+@interface ASAuthorizationPublicKeyCredentialPRFRegistrationInput : NSObject @end
+@implementation ASAuthorizationPublicKeyCredentialPRFRegistrationInput @end
+
+@interface ASAuthorizationWebBrowserPublicKeyCredentialManager : NSObject @end
+@implementation ASAuthorizationWebBrowserPublicKeyCredentialManager @end
+

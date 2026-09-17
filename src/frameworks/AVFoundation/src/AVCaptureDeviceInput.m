@@ -21,6 +21,25 @@
 
 @implementation AVCaptureDeviceInput
 
++ (instancetype)deviceInputWithDevice:(id)device error:(NSError **)outError
+{
+	(void)device;
+	if (outError)
+		*outError = [NSError errorWithDomain:@"AVFoundationErrorDomain" code:-11800 userInfo:nil];
+	return nil;
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+{
+	(void)aSelector;
+	return [NSMethodSignature signatureWithObjCTypes: "@@:@"];
+}
+
++ (void)forwardInvocation:(NSInvocation *)anInvocation
+{
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), self);
+}
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {
     return [NSMethodSignature signatureWithObjCTypes: "v@:"];
 }

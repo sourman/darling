@@ -18,6 +18,7 @@ add_framework(GameController
     VERSION ${FRAMEWORK_VERSION}
 
     SOURCES
+    	src/extra_comet_stubs.m
         src/GameController.m
         src/_GCCControllerHIDServiceInfo.m
         src/_GCControllerManager.m

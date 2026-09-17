@@ -19,6 +19,21 @@
 
 #include <Foundation/Foundation.h>
 
+NS_ASSUME_NONNULL_BEGIN
+
 @interface UTType : NSObject
 
+@property (readonly, copy) NSString *identifier;
+@property (readonly, copy, nullable) NSString *preferredMIMEType;
+@property (readonly, copy, nullable) NSString *preferredFilenameExtension;
+
++ (instancetype)typeWithMIMEType:(NSString *)mimeType;
++ (nullable instancetype)typeWithMIMEType:(NSString *)mimeType conformingToType:(nullable UTType *)supertype;
++ (instancetype)typeWithFilenameExtension:(NSString *)filenameExtension;
++ (nullable instancetype)typeWithIdentifier:(NSString *)identifier;
+
+- (BOOL)conformsToType:(UTType *)type;
+
 @end
+
+NS_ASSUME_NONNULL_END

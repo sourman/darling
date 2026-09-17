@@ -39,9 +39,11 @@ add_framework(CoreServices
 	VERSION ${FRAMEWORK_VERSION}
 
 	SOURCES
+		src/extra_comet_stubs.m
 		constants.m
 
 	DEPENDENCIES
+		objc
 		FSEvents
 		LaunchServices
 		CarbonCore

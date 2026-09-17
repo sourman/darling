@@ -33,6 +33,8 @@
 #include <sys/stat.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #include "job.h"
 
@@ -199,9 +201,18 @@ bootstrap_look_up3(mach_port_t bp, const name_t service_name, mach_port_t *sp, p
 	kern_return_t kr = 0;
 	mach_port_t puc;
 
+	fprintf(stderr, "bootstrap_lookup_v1 pid=%d bp=0x%x name=%s target_pid=%d flags=0x%llx\n",
+		(int)getpid(), bp, service_name ? service_name : "(null)",
+		(int)target_pid, (unsigned long long)flags);
+	fflush(stderr);
+
 	// We have to cast instance_id here because the MIG-generated method
 	// doesn't expect a const parameter.
 	if ((kr = vproc_mig_look_up2(bp, (char *)service_name, sp, &au_tok, target_pid, (unsigned char*)instance_id, flags)) != VPROC_ERR_TRY_PER_USER) {
+		fprintf(stderr, "bootstrap_lookup_v1 pid=%d name=%s kr=%d port=0x%x\n",
+			(int)getpid(), service_name ? service_name : "(null)",
+			(int)kr, sp ? *sp : 0);
+		fflush(stderr);
 		goto out;
 	}
 

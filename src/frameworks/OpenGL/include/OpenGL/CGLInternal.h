@@ -17,6 +17,10 @@ CGL_EXPORT CGLWindowRef CGLGetWindow(void *native_window);
 CGL_EXPORT void CGLDestroyWindow(CGLWindowRef window);
 
 CGL_EXPORT CGLError CGLContextMakeCurrentAndAttachToWindow(CGLContextObj context, CGLWindowRef window);
+CGL_EXPORT CGLError CGLGetDrawableSize(CGLContextObj context, GLint *width, GLint *height);
+CGL_EXPORT CGLError CGLPutBGRAOnDrawable(CGLContextObj context,
+                                         const void *pixels, int width,
+                                         int height, int bytesPerRow);
 CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, CGSSurfaceID sid);
 CGLContextObj CGWindowContextCreate(CGSConnectionID cid, CGSWindowID wid, CFDictionaryRef options);
 

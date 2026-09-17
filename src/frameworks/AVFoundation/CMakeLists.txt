@@ -521,6 +521,7 @@ add_framework(AVFoundation
         src/AVCameraCalibrationData.m
         src/AVCaptionOutputSettings.m
 	    constants.m
+            src/AVCaptureStubs.m
 
     DEPENDENCIES
         system

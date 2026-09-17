@@ -27,11 +27,14 @@ add_framework(CryptoTokenKit
 	VERSION ${FRAMEWORK_VERSION}
 
 	SOURCES
+		src/extra_comet_stubs.m
 		src/ctkclient.c
 		src/ctkclient_test.c
 		src/ctkloginhelper.c
 
 	DEPENDENCIES
+		objc
 		system
 		CoreFoundation
+		Foundation
 )

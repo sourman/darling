@@ -33,9 +33,11 @@ add_framework(Carbon
     VERSION ${FRAMEWORK_VERSION}
 
     SOURCES
+    	src/extra_comet_stubs.m
         src/Carbon.c
 
     DEPENDENCIES
+		objc
         CommonPanels
         Help
         HIToolbox

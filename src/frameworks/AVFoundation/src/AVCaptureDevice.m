@@ -18,8 +18,79 @@
 */
 
 #import <AVFoundation/AVCaptureDevice.h>
+#import <objc/runtime.h>
+#include <string.h>
 
 @implementation AVCaptureDevice
+
++ (NSInteger)authorizationStatusForMediaType:(NSString *)mediaType
+{
+	(void)mediaType;
+	/* AVAuthorizationStatusDenied — no camera/mic on this backend. */
+	return 2;
+}
+
++ (void)requestAccessForMediaType:(NSString *)mediaType
+                completionHandler:(void (^)(BOOL granted))handler
+{
+	(void)mediaType;
+	if (handler)
+		handler(NO);
+}
+
++ (NSArray *)devices
+{
+	return @[];
+}
+
++ (NSArray *)devicesWithMediaType:(NSString *)mediaType
+{
+	(void)mediaType;
+	return @[];
+}
+
++ (id)defaultDeviceWithMediaType:(NSString *)mediaType
+{
+	(void)mediaType;
+	return nil;
+}
+
++ (id)deviceWithUniqueID:(NSString *)deviceUniqueID
+{
+	(void)deviceUniqueID;
+	return nil;
+}
+
++ (id)discoverySessionWithDeviceTypes:(NSArray *)deviceTypes
+                            mediaType:(NSString *)mediaType
+                             position:(NSInteger)position
+{
+	(void)deviceTypes;
+	(void)mediaType;
+	(void)position;
+	Class sessionClass = NSClassFromString(@"AVCaptureDeviceDiscoverySession");
+	if (sessionClass)
+		return [[sessionClass alloc] init];
+	return nil;
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+{
+	const char *sel = sel_getName(aSelector);
+	if (sel && sel[0] != '\0')
+	{
+		if (strstr(sel, "authorizationStatus") || strstr(sel, "position") || strstr(sel, "Count"))
+			return [NSMethodSignature signatureWithObjCTypes: "q@:@"];
+		if (strstr(sel, "devices") || strstr(sel, "Device") || strstr(sel, "Session"))
+			return [NSMethodSignature signatureWithObjCTypes: "@@:@"];
+	}
+	return [NSMethodSignature signatureWithObjCTypes: "q@:@"];
+}
+
++ (void)forwardInvocation:(NSInvocation *)anInvocation
+{
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), self);
+}
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {
     return [NSMethodSignature signatureWithObjCTypes: "v@:"];

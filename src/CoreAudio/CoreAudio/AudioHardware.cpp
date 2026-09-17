@@ -143,6 +143,30 @@ OSStatus AudioObjectRemovePropertyListener(AudioObjectID inObjectID,
 	return obj->removePropertyListener(inAddress, inListener, inClientData);
 }
 
+#ifdef __BLOCKS__
+OSStatus AudioObjectAddPropertyListenerBlock(AudioObjectID inObjectID,
+		const AudioObjectPropertyAddress* inAddress,
+		dispatch_queue_t inDispatchQueue, AudioObjectPropertyListenerBlock inListener)
+{
+	(void)inObjectID;
+	(void)inAddress;
+	(void)inDispatchQueue;
+	(void)inListener;
+	return noErr;
+}
+
+OSStatus AudioObjectRemovePropertyListenerBlock(AudioObjectID inObjectID,
+		const AudioObjectPropertyAddress* inAddress,
+		dispatch_queue_t inDispatchQueue, AudioObjectPropertyListenerBlock inListener)
+{
+	(void)inObjectID;
+	(void)inAddress;
+	(void)inDispatchQueue;
+	(void)inListener;
+	return noErr;
+}
+#endif
+
 OSStatus AudioHardwareUnload(void)
 {
 	return noErr;

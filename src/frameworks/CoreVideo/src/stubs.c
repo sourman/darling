@@ -6,6 +6,91 @@ void* CVBufferRelease(void)
 	return NULL;
 }
 
+void* CVBufferCopyAttachment(void)
+{
+	return NULL;
+}
+
+void* CVBufferHasAttachment(void)
+{
+	return NULL;
+}
+
+void* CVBufferSetAttachment(void)
+{
+	return NULL;
+}
+
+void* CVDisplayLinkGetCurrentTime(void)
+{
+	return NULL;
+}
+
+void* CVDisplayLinkRetain(void)
+{
+	return NULL;
+}
+
+void* CVImageBufferGetCleanRect(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferCreateWithIOSurface(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferGetBytesPerRow(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferGetDataSize(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferGetHeightOfPlane(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferGetPixelFormatType(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferGetTypeID(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferIsPlanar(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferPoolCreate(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferPoolCreatePixelBuffer(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(void)
+{
+	return NULL;
+}
+
+void* CVPixelBufferPoolFlush(void)
+{
+	return NULL;
+}
+
 void* CVPixelBufferCreateWithPlanarBytes(void)
 {
 	printf("STUB: %s\n", __PRETTY_FUNCTION__);

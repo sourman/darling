@@ -18,6 +18,7 @@ add_framework(AVFAudio
 	VERSION ${FRAMEWORK_VERSION}
 
 	SOURCES
+		src/extra_comet_stubs.m
 		src/AVFAudio.m
         src/AVAudioIONode.m
         src/AVAudioOutputNode.m

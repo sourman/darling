@@ -25,9 +25,11 @@ add_framework(DiskArbitration
 	VERSION ${FRAMEWORK_VERSION}
 
 	SOURCES
+		extra_comet_stubs.m
 		${da_SRCS}
 
 	DEPENDENCIES
+		objc
 		system
 		CoreFoundation
 )

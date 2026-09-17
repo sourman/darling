@@ -18,17 +18,78 @@
 */
 
 #import <OpenDirectory/ODQuery.h>
+#import <OpenDirectory/ODNode.h>
+
+#import <Foundation/Foundation.h>
 
 @implementation ODQuery
 
++ (ODQuery *)queryWithNode:(ODNode *)inNode forRecordTypes:(id)inRecordTypeOrList attribute:(ODAttributeType)inAttribute
+                 matchType:(ODMatchType)inMatchType queryValues:(id)inQueryValueOrList
+          returnAttributes:(id)inReturnAttributeOrList maximumResults:(NSInteger)inMaximumResults
+                     error:(NSError **)outError
+{
+	if (outError)
+		*outError = nil;
+	return [[[self alloc] init] autorelease];
+}
+
+- (instancetype)initWithNode:(ODNode *)inNode forRecordTypes:(id)inRecordTypeOrList attribute:(ODAttributeType)inAttribute
+                   matchType:(ODMatchType)inMatchType queryValues:(id)inQueryValueOrList
+            returnAttributes:(id)inReturnAttributeOrList maximumResults:(NSInteger)inMaximumResults
+                       error:(NSError **)outError
+{
+	if (outError)
+		*outError = nil;
+	return [self init];
+}
+
+- (NSArray *)resultsAllowingPartial:(BOOL)inAllowPartialResults error:(NSError **)outError
+{
+	if (outError)
+		*outError = nil;
+	return [NSArray array];
+}
+
+- (void)scheduleInRunLoop:(NSRunLoop *)inRunLoop forMode:(NSString *)inMode
+{
+}
+
+- (void)removeFromRunLoop:(NSRunLoop *)inRunLoop forMode:(NSString *)inMode
+{
+}
+
+- (void)synchronize
+{
+}
+
+- (id)copyWithZone:(NSZone *)zone
+{
+	return [self retain];
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+{
+	return [NSMethodSignature signatureWithObjCTypes: "@@:"];
+}
+
++ (void)forwardInvocation:(NSInvocation *)anInvocation
+{
+	NSLog(@"Stub called: +%@ in %@", NSStringFromSelector([anInvocation selector]), self);
+	id ret = nil;
+	[anInvocation setReturnValue:&ret];
+}
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
-    return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+	return [NSMethodSignature signatureWithObjCTypes: "@@:"];
 }
 
 - (void)forwardInvocation:(NSInvocation *)anInvocation
 {
-    NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	id ret = nil;
+	[anInvocation setReturnValue:&ret];
 }
 
 @end

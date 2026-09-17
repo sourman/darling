@@ -48,7 +48,13 @@ extern struct sockaddr_un __dserver_socket_address_data;
 #define dserver_rpc_hooks_memcpy memcpy
 
 static long int dserver_rpc_hooks_send_message(int socket, const dserver_rpc_hooks_msghdr_t* message) {
-	ssize_t ret = sendmsg(socket, message, 0);
+	ssize_t ret;
+
+	if (socket < 0) {
+		return -EBADF;
+	}
+
+	ret = sendmsg(socket, message, 0);
 	if (ret < 0) {
 		return -errno;
 	}
@@ -56,7 +62,13 @@ static long int dserver_rpc_hooks_send_message(int socket, const dserver_rpc_hoo
 };
 
 static long int dserver_rpc_hooks_receive_message(int socket, dserver_rpc_hooks_msghdr_t* out_message) {
-	ssize_t ret = recvmsg(socket, out_message, 0);
+	ssize_t ret;
+
+	if (socket < 0) {
+		return -EBADF;
+	}
+
+	ret = recvmsg(socket, out_message, 0);
 	if (ret < 0) {
 		return -errno;
 	}

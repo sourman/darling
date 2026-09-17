@@ -100,3 +100,10 @@ const AVMetadataKey AVMetadataCommonKeyDescription = @"description";
 const AVMetadataKey AVMetadataCommonKeyTitle = @"title";
 
 const AVMetadataKey AVMetadataID3MetadataKeyUserURL = @"WXXX";
+
+NSString *const AVCaptureDeviceTypeBuiltInWideAngleCamera = @"AVCaptureDeviceTypeBuiltInWideAngleCamera";
+NSString *const AVCaptureDeviceTypeContinuityCamera = @"AVCaptureDeviceTypeContinuityCamera";
+NSString *const AVCaptureDeviceTypeExternal = @"AVCaptureDeviceTypeExternal";
+NSString *const AVCaptureDeviceTypeExternalUnknown = @"AVCaptureDeviceTypeExternalUnknown";
+NSString *const AVCaptureDeviceTypeMicrophone = @"AVCaptureDeviceTypeMicrophone";
+NSString *const AVVideoCodecTypeJPEG = @"jpeg";

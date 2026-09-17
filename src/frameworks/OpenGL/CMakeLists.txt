@@ -11,8 +11,9 @@ include(darling_framework)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PC_EGL egl)
+find_package(X11 REQUIRED)
 
-include_directories(${PC_EGL_INCLUDE_DIRS})
+include_directories(${PC_EGL_INCLUDE_DIRS} ${X11_INCLUDE_DIR})
 
 generate_sdk_framework(OpenGL
     VERSION ${FRAMEWORK_VERSION}
@@ -32,6 +33,7 @@ add_framework(OpenGL
         GL
         GLU
         EGL
+        X11
         CoreFoundation
         CoreGraphics
 )

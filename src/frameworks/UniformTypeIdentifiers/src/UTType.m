@@ -19,16 +19,99 @@
 
 #import <UniformTypeIdentifiers/UTType.h>
 
-@implementation UTType
+@implementation UTType {
+	NSString *_identifier;
+	NSString *_mimeType;
+	NSString *_extension;
+}
+
++ (instancetype)typeWithMIMEType:(NSString *)mimeType
+{
+	return [self typeWithMIMEType:mimeType conformingToType:nil];
+}
+
++ (instancetype)typeWithMIMEType:(NSString *)mimeType conformingToType:(UTType *)supertype
+{
+	(void)supertype;
+	UTType *type = [[self alloc] init];
+	type->_mimeType = [mimeType copy];
+	if ([mimeType isEqualToString:@"application/pdf"]) {
+		type->_identifier = @"com.adobe.pdf";
+		type->_extension = @"pdf";
+	} else if ([mimeType isEqualToString:@"text/html"]) {
+		type->_identifier = @"public.html";
+		type->_extension = @"html";
+	} else {
+		type->_identifier = mimeType ? [@"public.mime." stringByAppendingString:mimeType] : @"public.data";
+	}
+	return type;
+}
+
++ (instancetype)typeWithFilenameExtension:(NSString *)filenameExtension
+{
+	UTType *type = [[self alloc] init];
+	type->_extension = [filenameExtension copy];
+	if ([filenameExtension isEqualToString:@"pdf"]) {
+		type->_identifier = @"com.adobe.pdf";
+		type->_mimeType = @"application/pdf";
+	} else {
+		type->_identifier = filenameExtension ? [@"public.filename-extension." stringByAppendingString:filenameExtension] : @"public.data";
+	}
+	return type;
+}
+
++ (instancetype)typeWithIdentifier:(NSString *)identifier
+{
+	UTType *type = [[self alloc] init];
+	type->_identifier = [identifier copy];
+	return type;
+}
+
+- (NSString *)identifier
+{
+	return _identifier ?: @"public.data";
+}
+
+- (NSString *)preferredMIMEType
+{
+	return _mimeType;
+}
+
+- (NSString *)preferredFilenameExtension
+{
+	return _extension;
+}
+
+- (BOOL)conformsToType:(UTType *)type
+{
+	if (!type)
+		return NO;
+	return [self.identifier isEqualToString:type.identifier];
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+{
+	NSString *name = NSStringFromSelector(aSelector);
+	if ([name hasPrefix:@"typeWith"] || [name hasSuffix:@":"])
+		return [NSMethodSignature signatureWithObjCTypes:"@@:@"];
+	return [NSMethodSignature signatureWithObjCTypes:"@@:"];
+}
+
++ (void)forwardInvocation:(NSInvocation *)anInvocation
+{
+	NSLog(@"Stub called: +%@ in %@", NSStringFromSelector([anInvocation selector]), self);
+	id result = [[self alloc] init];
+	[anInvocation setReturnValue:&result];
+}
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
-    return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+	return [NSMethodSignature signatureWithObjCTypes: "v@:"];
 }
 
 - (void)forwardInvocation:(NSInvocation *)anInvocation
 {
-    NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
 }
 
 @end

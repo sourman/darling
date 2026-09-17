@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
 	<key>ProductBuildVersion</key>
-	<string>Darling</string>
+	<string>22G120</string>
 	<key>ProductCopyright</key>
 	<string>2012-2023 Lubos Dolezel</string>
 	<key>ProductName</key>
 	<string>macOS</string>
 	<key>ProductUserVisibleVersion</key>
-	<string>11.7.4</string>
+	<string>13.6.7</string>
 	<key>ProductVersion</key>
-	<string>11.7.4</string>
+	<string>13.6.7</string>
 	<key>iOSSupportVersion</key>
 	<string>14.7</string>
 </dict>

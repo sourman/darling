@@ -827,13 +827,20 @@ static void setup_space(struct load_results* lr, bool is_64_bit) {
 
 	struct rlimit limit;
 	getrlimit(RLIMIT_STACK, &limit);
-	// allocate a few pages 16 pages if it's less than the limit; otherwise, allocate the limit
-	unsigned long size = PAGE_SIZE * 16;
-	if (limit.rlim_cur != RLIM_INFINITY && limit.rlim_cur < size) {
-		size = limit.rlim_cur;
+	// Chromium-class binaries overflow a 64KiB MAP_GROWSDOWN stack during dyld
+	// initializers. Pre-map a real stack: rlimit if finite, otherwise 32MiB, at least 16MiB.
+	unsigned long size = 16ul * 1024 * 1024;
+	if (limit.rlim_cur == RLIM_INFINITY) {
+		size = 32ul * 1024 * 1024;
+	} else if (limit.rlim_cur > size) {
+		size = (unsigned long)limit.rlim_cur;
 	}
+	if (lr->stack_size > size) {
+		size = lr->stack_size;
+	}
+	size = (size + PAGE_SIZE - 1) & ~(unsigned long)(PAGE_SIZE - 1);
 
-	if (compatible_mmap((void*)(lr->stack_top - size), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE | MAP_GROWSDOWN, -1, 0) == MAP_FAILED) {
+	if (compatible_mmap((void*)(lr->stack_top - size), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) == MAP_FAILED) {
 		fprintf(stderr, "Failed to allocate stack of %lu bytes: %d (%s)\n", size, errno, strerror(errno));
 		exit(1);
 	}

@@ -18,17 +18,62 @@
 */
 
 #import <OpenDirectory/ODNode.h>
+#import <OpenDirectory/ODSession.h>
+
+#import <Foundation/Foundation.h>
 
 @implementation ODNode
 
++ (instancetype)nodeWithSession:(ODSession *)inSession type:(ODNodeType)inType error:(NSError **)outError
+{
+	if (outError)
+		*outError = nil;
+	return [[[self alloc] init] autorelease];
+}
+
++ (instancetype)nodeWithSession:(ODSession *)inSession name:(NSString *)inName error:(NSError **)outError
+{
+	if (outError)
+		*outError = nil;
+	return [[[self alloc] init] autorelease];
+}
+
+- (instancetype)initWithSession:(ODSession *)inSession type:(ODNodeType)inType error:(NSError **)outError
+{
+	if (outError)
+		*outError = nil;
+	return [self init];
+}
+
+- (instancetype)initWithSession:(ODSession *)inSession name:(NSString *)inName error:(NSError **)outError
+{
+	if (outError)
+		*outError = nil;
+	return [self init];
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+{
+	return [NSMethodSignature signatureWithObjCTypes: "@@:"];
+}
+
++ (void)forwardInvocation:(NSInvocation *)anInvocation
+{
+	NSLog(@"Stub called: +%@ in %@", NSStringFromSelector([anInvocation selector]), self);
+	id ret = nil;
+	[anInvocation setReturnValue:&ret];
+}
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
-    return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+	return [NSMethodSignature signatureWithObjCTypes: "@@:"];
 }
 
 - (void)forwardInvocation:(NSInvocation *)anInvocation
 {
-    NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	id ret = nil;
+	[anInvocation setReturnValue:&ret];
 }
 
 @end

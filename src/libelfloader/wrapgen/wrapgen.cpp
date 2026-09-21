@@ -253,9 +253,99 @@ end_dyn:
 
 void generate_wrapper(std::ofstream& output, const char* soname, const std::set<std::string>& symbols)
 {
-	output << "#include <elfcalls.h>\n"
-		"extern struct elf_calls* _elfcalls;\n\n"
+	const bool is_gl = symbols.count("glGetString") > 0;
+
+	output << "#include <elfcalls.h>\n";
+	if (is_gl)
+		output << "#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n";
+	output << "extern struct elf_calls* _elfcalls;\n\n"
 		"extern const char __elfname[];\n\n";
+
+	if (is_gl) {
+		output <<
+			"__attribute__((used)) const char gl_string_guard_v1[] = \"gl_string_guard_v1\";\n"
+			"__attribute__((used)) const char gl_procaddr_string_v1[] = \"gl_procaddr_string_v1\";\n"
+			"__attribute__((used)) const char gl_es_from_desktop_v1[] = \"gl_es_from_desktop_v1\";\n"
+			"__attribute__((used)) const char gl_desktop_native_v1[] = \"gl_desktop_native_v1\";\n"
+			"__attribute__((used)) const char gl_es_bgra_ext_v1[] = \"gl_es_bgra_ext_v1\";\n"
+			"\n"
+			"static int gl_string_ok(const char *s)\n"
+			"{\n"
+			"\tuintptr_t p = (uintptr_t)s;\n"
+			"\tint i;\n"
+			"\tif (!s || !s[0])\n"
+			"\t\treturn 0;\n"
+			"\t/* 0x501004-class: unslid Mach-O / non-C-string sentinel. */\n"
+			"\tif (p < 0x1000000ul)\n"
+			"\t\treturn 0;\n"
+			"\tfor (i = 0; i < 4096; i++) {\n"
+			"\t\tif (s[i] == '\\0')\n"
+			"\t\t\treturn 1;\n"
+			"\t}\n"
+			"\treturn 0;\n"
+			"}\n"
+			"\n"
+			"static const char *const gl_extra_exts[] = {\n"
+			"\t\"GL_EXT_texture_format_BGRA8888\",\n"
+			"\t\"GL_APPLE_texture_format_BGRA8888\",\n"
+			"\t\"GL_EXT_bgra\",\n"
+			"\t\"GL_ARB_texture_rectangle\",\n"
+			"\t\"GL_EXT_texture_rectangle\",\n"
+			"\t\"GL_APPLE_ycbcr_422\",\n"
+			"\tNULL\n"
+			"};\n"
+			"\n"
+			"static int gl_extra_ext_count(void)\n"
+			"{\n"
+			"\tint n = 0;\n"
+			"\twhile (gl_extra_exts[n])\n"
+			"\t\tn++;\n"
+			"\treturn n;\n"
+			"}\n"
+			"\n"
+			"static const unsigned char *gl_es_extensions(const char *src)\n"
+			"{\n"
+			"\tstatic char buf[16384];\n"
+			"\tint i;\n"
+			"\tsize_t len;\n"
+			"\tif (!src)\n"
+			"\t\tsrc = \"\";\n"
+			"\tsnprintf(buf, sizeof(buf), \"%s\", src);\n"
+			"\tfor (i = 0; gl_extra_exts[i]; i++) {\n"
+			"\t\tif (strstr(buf, gl_extra_exts[i]))\n"
+			"\t\t\tcontinue;\n"
+			"\t\tlen = strlen(buf);\n"
+			"\t\tif (len + 2 + strlen(gl_extra_exts[i]) >= sizeof(buf))\n"
+			"\t\t\tbreak;\n"
+			"\t\tif (len && buf[len - 1] != ' ')\n"
+			"\t\t\tbuf[len++] = ' ', buf[len] = '\\0';\n"
+			"\t\tstrncat(buf, gl_extra_exts[i], sizeof(buf) - strlen(buf) - 1);\n"
+			"\t}\n"
+			"\treturn (const unsigned char *)buf;\n"
+			"}\n"
+			"\n"
+			"/* Empty/sentinel GL_VERSION only. A live desktop string must stay desktop so\n"
+			"   ANGLE FunctionsGLCGL takes the GL-desktop backend (BGRA RT + TEXTURE_RECTANGLE).\n"
+			"   Rewriting 4.5 Compatibility -> GLES 3.2 made Skia CHECK on 1x1 BGRA\n"
+			"   skia_output_surface_impl.cc:1291 (VizBufferQueue Scanout). Chrome's\n"
+			"   gl_version_info ES CHECK reads ANGLE's GLES frontend, not this native string. */\n"
+			"static const unsigned char *gl_string_fallback(unsigned int name)\n"
+			"{\n"
+			"\tswitch (name) {\n"
+			"\tcase 0x1F00: return (const unsigned char *)\"Mesa\";\n"
+			"\tcase 0x1F01: return (const unsigned char *)\"llvmpipe (LLVM 18, 256 bits)\";\n"
+			"\tcase 0x1F02: return (const unsigned char *)\"OpenGL ES 3.2 Mesa 24.2.6\";\n"
+			"\tcase 0x1F03: return gl_es_extensions(\"GL_ARB_vertex_array_object GL_ARB_framebuffer_object GL_OES_rgb8_rgba8 GL_EXT_texture_format_BGRA8888 GL_APPLE_texture_format_BGRA8888 GL_EXT_bgra\");\n"
+			"\tcase 0x8B8C: return (const unsigned char *)\"OpenGL ES GLSL ES 3.20\";\n"
+			"\tdefault: return (const unsigned char *)\"\";\n"
+			"\t}\n"
+			"}\n"
+			"\n"
+			"const unsigned char* glGetString(unsigned int name);\n"
+			"const unsigned char *glGetStringi(unsigned int name, unsigned int index);\n"
+			"void glGetIntegerv(unsigned int pname, int *params);\n"
+			"\n";
+	}
 
 	output << "static void* lib_handle;\n"
 		"__attribute__((constructor)) static void initializer() {\n"
@@ -268,6 +358,92 @@ void generate_wrapper(std::ofstream& output, const char* soname, const std::set<
 	
 	for (const std::string& sym : symbols)
 	{
+		if (is_gl && sym == "glGetString") {
+			output <<
+				"const unsigned char* glGetString(unsigned int name) {\n"
+				"\tstatic const unsigned char* (*real)(unsigned int);\n"
+				"\tconst unsigned char* s;\n"
+				"\tif (!real)\n"
+				"\t\treal = (const unsigned char*(*)(unsigned int))_elfcalls->dlsym_fatal(lib_handle, \"glGetString\");\n"
+				"\ts = real(name);\n"
+				"\tif (!gl_string_ok((const char *)s)) {\n"
+				"\t\tfprintf(stderr, \"gl_string_guard_v1 name=0x%x ptr=%p -> fallback\\n\",\n"
+				"\t\t\tname, (const void *)s);\n"
+				"\t\tfflush(stderr);\n"
+				"\t\ts = gl_string_fallback(name);\n"
+				"\t}\n"
+				"\tif (name == 0x1F02) {\n"
+				"\t\tfprintf(stderr, \"gl_desktop_native_v1 GL_VERSION='%s'\\n\",\n"
+				"\t\t\t(const char *)s);\n"
+				"\t\tfflush(stderr);\n"
+				"\t}\n"
+				"\tif (name == 0x1F03)\n"
+				"\t\treturn gl_es_extensions((const char *)s);\n"
+				"\treturn s;\n"
+				"}\n\n";
+			continue;
+		}
+		if (is_gl && sym == "glGetStringi") {
+			output <<
+				"const unsigned char *glGetStringi(unsigned int name, unsigned int index)\n"
+				"{\n"
+				"\tstatic const unsigned char *(*real)(unsigned int, unsigned int);\n"
+				"\tstatic void (*giv)(unsigned int, int *);\n"
+				"\tstatic int native_n = -1;\n"
+				"\tif (!real)\n"
+				"\t\treal = (const unsigned char *(*)(unsigned int, unsigned int))\n"
+				"\t\t\t_elfcalls->dlsym_fatal(lib_handle, \"glGetStringi\");\n"
+				"\tif (name != 0x1F03)\n"
+				"\t\treturn real(name, index);\n"
+				"\tif (native_n < 0) {\n"
+				"\t\tif (!giv)\n"
+				"\t\t\tgiv = (void (*)(unsigned int, int *))\n"
+				"\t\t\t\t_elfcalls->dlsym_fatal(lib_handle, \"glGetIntegerv\");\n"
+				"\t\tnative_n = 0;\n"
+				"\t\tgiv(0x821D, &native_n);\n"
+				"\t}\n"
+				"\tif ((int) index < native_n)\n"
+				"\t\treturn real(name, index);\n"
+				"\tindex -= (unsigned) native_n;\n"
+				"\tif ((int) index < gl_extra_ext_count())\n"
+				"\t\treturn (const unsigned char *) gl_extra_exts[index];\n"
+				"\treturn NULL;\n"
+				"}\n\n";
+			continue;
+		}
+		if (is_gl && sym == "glGetIntegerv") {
+			output <<
+				"void glGetIntegerv(unsigned int pname, int *params)\n"
+				"{\n"
+				"\tstatic void (*real)(unsigned int, int *);\n"
+				"\tif (!real)\n"
+				"\t\treal = (void (*)(unsigned int, int *))\n"
+				"\t\t\t_elfcalls->dlsym_fatal(lib_handle, \"glGetIntegerv\");\n"
+				"\treal(pname, params);\n"
+				"\tif (pname == 0x821D && params)\n"
+				"\t\t*params += gl_extra_ext_count();\n"
+				"}\n\n";
+			continue;
+		}
+		if (is_gl && (sym == "glXGetProcAddress" || sym == "glXGetProcAddressARB")) {
+			output <<
+				"void* " << sym << "(const unsigned char *procName) {\n"
+				"\tstatic void* (*real)(const unsigned char *);\n"
+				"\tif (procName && strcmp((const char *)procName, \"glGetString\") == 0) {\n"
+				"\t\tfprintf(stderr, \"gl_procaddr_string_v1 " << sym << " -> wrap\\n\");\n"
+				"\t\tfflush(stderr);\n"
+				"\t\treturn (void *)glGetString;\n"
+				"\t}\n"
+				"\tif (procName && strcmp((const char *)procName, \"glGetStringi\") == 0)\n"
+				"\t\treturn (void *)glGetStringi;\n"
+				"\tif (procName && strcmp((const char *)procName, \"glGetIntegerv\") == 0)\n"
+				"\t\treturn (void *)glGetIntegerv;\n"
+				"\tif (!real)\n"
+				"\t\treal = (void*(*)(const unsigned char *))_elfcalls->dlsym_fatal(lib_handle, \"" << sym << "\");\n"
+				"\treturn real(procName);\n"
+				"}\n\n";
+			continue;
+		}
 		output << "void* " << sym << "() {\n"
 			"\t__asm__(\".symbol_resolver _" << sym << "\");\n"
 			"\treturn _elfcalls->dlsym_fatal(lib_handle, \"" << sym << "\");\n"

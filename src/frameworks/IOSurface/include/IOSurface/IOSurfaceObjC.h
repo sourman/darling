@@ -85,6 +85,8 @@ extern IOSurfacePropertyKey IOSurfacePropertyKeyPixelSizeCastingAllowed;
 
 - (kern_return_t)setPurgeable:(IOSurfacePurgeabilityState)newState oldState:(IOSurfacePurgeabilityState * _Nullable)oldState;
 
+- (mach_port_t)createMachPort;
+
 @end
 
 

@@ -17,8 +17,24 @@
  along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#pragma once
+
 #include <Foundation/Foundation.h>
 
+@class ASWebAuthenticationSessionRequest;
+
+@protocol ASWebAuthenticationSessionWebBrowserSessionHandling <NSObject>
+- (void)beginHandlingWebAuthenticationSessionRequest:(ASWebAuthenticationSessionRequest *)request;
+- (void)cancelWebAuthenticationSessionRequest:(ASWebAuthenticationSessionRequest *)request;
+@end
+
 @interface ASWebAuthenticationSessionWebBrowserSessionManager : NSObject
+
++ (instancetype)sharedManager;
+
+@property (nonatomic, assign) id<ASWebAuthenticationSessionWebBrowserSessionHandling> sessionHandler;
+@property (nonatomic, readonly) BOOL wasLaunchedByAuthenticationServices;
+
+- (void)didFinishLaunch;
 
 @end

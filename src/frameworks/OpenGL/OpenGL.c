@@ -2,8 +2,10 @@
 #include <stdio.h>  // for fprintf(stderr, "unimplemented")
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include <pthread.h>
+#include <dlfcn.h>
 
 #include <OpenGL/OpenGL.h>
 #include <OpenGL/CGLInternal.h>
@@ -30,6 +32,12 @@
 
 __attribute__((used)) const char cgl_glx_window_visual_v1[] =
         "cgl_glx_window_visual_v1";
+__attribute__((used)) const char cgl_offscreen_glx_v1[] =
+        "cgl_offscreen_glx_v1";
+__attribute__((used)) const char cgl_keep_glx_for_angle_v1[] =
+        "cgl_keep_glx_for_angle_v1";
+__attribute__((used)) const char cgl_procaddr_string_v1[] =
+        "cgl_procaddr_string_v1";
 
 static EGLDisplay display;
 static Display *g_x_display;
@@ -118,6 +126,7 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
     case kCGLPFAAccumSize:
     case kCGLPFARendererID:
     case kCGLPFADisplayMask:
+    case kCGLPFAOpenGLProfile:
         return 1;
     default:
         return 0;
@@ -128,6 +137,32 @@ __attribute__((constructor))
 static void _CGLInitialize(void)
 {
     g_displays = CFDictionaryCreateMutable(NULL, 0, NULL, NULL);
+}
+
+/* GPU helper never calls CGLRegisterNativeDisplay (that's AppKit/X11).
+   Bind offscreen GLX at load so glGetString(GL_VERSION) is a real C string
+   before Chrome's gl_version_info CHECK. */
+__attribute__((constructor(200)))
+static void cglBootOffscreenContext(void)
+{
+    static CGLContextObj boot;
+    CGLError err;
+
+    if (boot)
+        return;
+    err = CGLCreateContext(NULL, NULL, &boot);
+    fprintf(stderr, "cgl_offscreen_glx_v1 boot CreateContext err=%d ctx=%p\n",
+            (int) err, (void *) boot);
+    fflush(stderr);
+    if (err == kCGLNoError && boot) {
+        CGLSetCurrentContext(boot);
+        /* Keep the boot GLX context current. Unbinding it (cgl_unbind_for_egl_v1)
+           let Mesa EGL eglMakeCurrent, but ANGLE-GL does not load Darling
+           libEGL — it dlsyms CGL then libGL. Empty GL_VERSION was the unbound
+           native context on that path. */
+        fprintf(stderr, "cgl_keep_glx_for_angle_v1 boot current\n");
+        fflush(stderr);
+    }
 }
 
 static int attributes_count(const CGLPixelFormatAttribute *attrs) {
@@ -273,6 +308,7 @@ CGL_EXPORT CGLError CGLContextMakeCurrentAndAttachToWindow(CGLContextObj context
 }
 
 static pthread_key_t current_context_key;
+static int cglBindOffscreenGLX(CGLContextObj context, GLXContext share);
 
 static void make_key() {
     pthread_key_create(&current_context_key, NULL);
@@ -293,6 +329,9 @@ CGLError CGLSetCurrentContext(CGLContextObj context) {
     pthread_key_t key = get_current_context_key();
     pthread_setspecific(key, context);
 
+    if (context != NULL && !context->glx_context)
+        (void) cglBindOffscreenGLX(context, NULL);
+
     if (context != NULL && context->use_glx && g_x_display) {
         if (!glXMakeCurrent(g_x_display, context->glx_drawable,
                             context->glx_context)) {
@@ -311,7 +350,10 @@ CGLError CGLSetCurrentContext(CGLContextObj context) {
     }
 
     if (context == NULL && g_x_display) {
-        glXMakeCurrent(g_x_display, None, NULL);
+        /* Leave the last GLX context bound so glGetString(GL_VERSION) stays a
+           real C string for ANGLE FunctionsGLCGL / Chrome gl_version_info. */
+        fprintf(stderr, "cgl_keep_glx_for_angle_v1 skip unbind\n");
+        fflush(stderr);
         return kCGLNoError;
     }
 
@@ -340,13 +382,24 @@ CGLError CGLChoosePixelFormat(
     int count = attributes_count(attrs);
 
     format->retain_count = 1;
-    format->attributes = malloc(sizeof(CGLPixelFormatAttribute) * count);
+    format->attributes = malloc(sizeof(CGLPixelFormatAttribute) * (count + 1));
     for (int i = 0; i < count; i++) {
         format->attributes[i] = attrs[i];
     }
+    format->attributes[count] = 0;
 
     *result = format;
     *number_of_screens = 1;
+    {
+        unsigned a0 = count > 0 ? (unsigned) attrs[0] : 0;
+        unsigned a1 = count > 1 ? (unsigned) attrs[1] : 0;
+        unsigned a2 = count > 2 ? (unsigned) attrs[2] : 0;
+        fprintf(stderr,
+                "cgl_keep_glx_for_angle_v1 ChoosePixelFormat pid=%d n=%d "
+                "a0=%u a1=0x%x a2=%u fmt=%p\n",
+                (int) getpid(), count, a0, a1, a2, (void *) format);
+        fflush(stderr);
+    }
 
     return kCGLNoError;
 }
@@ -364,20 +417,41 @@ CGLError CGLDescribePixelFormat(
     CGLPixelFormatAttribute attr,
     GLint *value
 ) {
-    for (int i = 0; format->attributes[i] != 0; i++) {
-        int has_arg = attribute_has_argument(format->attributes[i]);
+    if (!format || !value)
+        return kCGLBadAddress;
+    (void) sreen_num;
+    if (attr == kCGLPFAVirtualScreenCount) {
+        *value = 1;
+        return kCGLNoError;
+    }
+    if (attr == kCGLPFADisplayMask) {
+        *value = (GLint) 0xffffffff;
+        return kCGLNoError;
+    }
+    if (attr == kCGLPFAAccelerated) {
+        *value = 0;
+        return kCGLNoError;
+    }
+    if (attr == kCGLPFAOpenGLProfile) {
+        *value = (GLint) kCGLOGLPVersion_3_2_Core;
+        return kCGLNoError;
+    }
+    if (format->attributes) {
+        for (int i = 0; format->attributes[i] != 0; i++) {
+            int has_arg = attribute_has_argument(format->attributes[i]);
 
-        if (format->attributes[i] == attr) {
-            if (has_arg) {
-                *value = format->attributes[i + 1];
-            } else {
-                *value = 1;
+            if (format->attributes[i] == attr) {
+                if (has_arg) {
+                    *value = format->attributes[i + 1];
+                } else {
+                    *value = 1;
+                }
+                return kCGLNoError;
             }
-            return kCGLNoError;
-        }
 
-        if (has_arg) {
-            i++;
+            if (has_arg) {
+                i++;
+            }
         }
     }
 
@@ -416,6 +490,70 @@ GLuint CGLGetPixelFormatRetainCount(CGLPixelFormatObj pixelFormat) {
     return pixelFormat->retain_count;
 }
 
+static int cglEnsureXDisplay(void)
+{
+    if (g_x_display)
+        return 1;
+    const char *d = getenv("DISPLAY");
+    if (!d || !d[0])
+        d = ":1";
+    g_x_display = XOpenDisplay(d);
+    fprintf(stderr, "cgl_offscreen_glx_v1 XOpenDisplay %s -> %p\n", d,
+            (void *) g_x_display);
+    fflush(stderr);
+    return g_x_display != NULL;
+}
+
+static int cglBindOffscreenGLX(CGLContextObj context, GLXContext share)
+{
+    int scr;
+    int attrs[] = { GLX_RGBA, GLX_DOUBLEBUFFER, GLX_DEPTH_SIZE, 16, None };
+    int attrs2[] = { GLX_RGBA, None };
+    XVisualInfo *vi;
+    Window root;
+    Window win;
+
+    if (!context)
+        return 0;
+    if (!cglEnsureXDisplay())
+        return 0;
+    if (context->glx_context && context->glx_drawable)
+        return 1;
+
+    scr = DefaultScreen(g_x_display);
+    vi = glXChooseVisual(g_x_display, scr, attrs);
+    if (!vi)
+        vi = glXChooseVisual(g_x_display, scr, attrs2);
+    if (!vi) {
+        fprintf(stderr, "cgl_offscreen_glx_v1 glXChooseVisual failed\n");
+        fflush(stderr);
+        return 0;
+    }
+    root = RootWindow(g_x_display, scr);
+    win = XCreateSimpleWindow(g_x_display, root, -64, -64, 8, 8, 0,
+                              BlackPixel(g_x_display, scr),
+                              BlackPixel(g_x_display, scr));
+    context->glx_context = glXCreateContext(g_x_display, vi, share, True);
+    context->glx_drawable = win;
+    context->use_glx = 1;
+    fprintf(stderr, "cgl_offscreen_glx_v1 ctx=%p win=0x%lx vis=0x%lx\n",
+            context->glx_context, (unsigned long) win,
+            (unsigned long) vi->visualid);
+    fflush(stderr);
+    XFree(vi);
+    if (context->glx_context) {
+        if (glXMakeCurrent(g_x_display, win, context->glx_context)) {
+            const GLubyte *ver = glGetString(GL_VERSION);
+            fprintf(stderr, "cgl_offscreen_glx_v1 MakeCurrent ok VERSION=%s\n",
+                    ver ? (const char *) ver : "(null)");
+        } else {
+            fprintf(stderr, "cgl_offscreen_glx_v1 MakeCurrent FAILED\n");
+        }
+        fflush(stderr);
+    }
+    return context->glx_context != NULL;
+}
+
 CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CGLContextObj *resultp) {
     (void) pixelFormat;
 
@@ -434,8 +572,13 @@ CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CG
         context->egl_context = eglCreateContext(display, config, egl_share, NULL);
     }
 
-    if (share && share->glx_context)
-        context->glx_context = NULL; /* created on attach against the window visual */
+    /* DCV EGL can hand back a non-NULL context that cannot make current.
+       Always bind offscreen GLX so glGetString returns a real C string
+       instead of an unslid/sentinel pointer (0x501004). */
+    if (!context->glx_context) {
+        GLXContext share_glx = (share && share->glx_context) ? share->glx_context : NULL;
+        (void) cglBindOffscreenGLX(context, share_glx);
+    }
 
     *resultp = context;
     return kCGLNoError;
@@ -621,14 +764,244 @@ CGLError CGLGetParameter(CGLContextObj context, CGLContextParameter parameter, G
     return kCGLNoError;
 }
 
+struct _CGLRendererInfoObj {
+    int dummy;
+};
+
 CGLError CGLDescribeRenderer(CGLRendererInfoObj rend, long rend_num, CGLRendererProperty prop, long *value) {
+    if (!value)
+        return kCGLBadValue;
+    (void) rend;
+    (void) rend_num;
+    switch (prop) {
+    case kCGLRPAccelerated:
+        *value = 0;
+        break;
+    case kCGLRPWindow:
+    case kCGLRPCompliant:
+    case kCGLRPBackingStore:
+        *value = 1;
+        break;
+    case kCGLRPOffScreen:
+    case kCGLRPFullScreen:
+    case kCGLRPMultiScreen:
+        *value = 0;
+        break;
+    case kCGLRPDisplayMask:
+        *value = 0xffffffff;
+        break;
+    case kCGLRPRendererID:
+        *value = 0x00020400; /* Apple Software Renderer-ish */
+        break;
+    case kCGLRPVideoMemory:
+    case kCGLRPTextureMemory:
+        *value = 256 * 1024 * 1024;
+        break;
+    case kCGLRPRendererCount:
+        *value = 1;
+        break;
+    default:
+        *value = 0;
+        break;
+    }
     return kCGLNoError;
 }
 
 CGLError CGLQueryRendererInfo(unsigned long display_mask, CGLRendererInfoObj *rend, long *nrend) {
+    static struct _CGLRendererInfoObj dummy;
+    (void) display_mask;
+    if (rend)
+        *rend = &dummy;
+    if (nrend)
+        *nrend = 1;
+    fprintf(stderr, "CGLQueryRendererInfo mask=0x%lx n=1 dummy\n", display_mask);
+    fflush(stderr);
     return kCGLNoError;
 }
 
 CGLError CGLDestroyRendererInfo(CGLRendererInfoObj rend) {
+    (void) rend;
+    return kCGLNoError;
+}
+
+CGL_EXPORT CGLError CGLTexImageIOSurface2D(CGLContextObj ctx, GLenum target,
+                                           GLenum internal_format, GLsizei width,
+                                           GLsizei height, GLenum format,
+                                           GLenum type, void *ioSurface,
+                                           GLuint plane);
+
+CGL_EXPORT void *CGLGetProcAddress(const char *name) {
+    if (name && strcmp(name, "glGetString") == 0) {
+        fprintf(stderr, "cgl_procaddr_string_v1 -> wrap glGetString\n");
+        fflush(stderr);
+        return (void *) glGetString;
+    }
+    if (name && strcmp(name, "CGLTexImageIOSurface2D") == 0) {
+        fprintf(stderr, "cgl_procaddr_iosurface_v1 -> CGLTexImageIOSurface2D\n");
+        fflush(stderr);
+        return (void *) CGLTexImageIOSurface2D;
+    }
+    return (void *) glXGetProcAddress((const GLubyte *) (name ? name : ""));
+}
+
+CGL_EXPORT const char *CGLErrorString(CGLError error) {
+    return error == kCGLNoError ? "kCGLNoError" : "CGL error";
+}
+
+CGL_EXPORT CGLError CGLSetVirtualScreen(CGLContextObj ctx, GLint screen) {
+    (void) ctx;
+    (void) screen;
+    return kCGLNoError;
+}
+
+CGL_EXPORT CGLError CGLUpdateContext(CGLContextObj ctx) {
+    (void) ctx;
+    return kCGLNoError;
+}
+
+__attribute__((used)) const char cgl_iosurface_teximage_v1[] =
+        "cgl_iosurface_teximage_v1";
+__attribute__((used)) const char cgl_procaddr_iosurface_v1[] =
+        "cgl_procaddr_iosurface_v1";
+
+static void *cgl_iosurface_sym(const char *name)
+{
+    static void *h;
+    if (!h)
+        h = dlopen("/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
+                   RTLD_LAZY);
+    return h ? dlsym(h, name) : NULL;
+}
+
+#ifndef GL_TEXTURE_RECTANGLE
+#define GL_TEXTURE_RECTANGLE 0x84F5
+#endif
+#ifndef GL_BGRA
+#define GL_BGRA 0x80E1
+#endif
+#ifndef GL_UNSIGNED_INT_8_8_8_8_REV
+#define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
+#endif
+
+CGL_EXPORT CGLError CGLTexImageIOSurface2D(CGLContextObj ctx, GLenum target,
+                                           GLenum internal_format, GLsizei width,
+                                           GLsizei height, GLenum format,
+                                           GLenum type, void *ioSurface,
+                                           GLuint plane) {
+    typedef void *(*ios_base_fn)(void *);
+    typedef void *(*ios_plane_base_fn)(void *, size_t);
+    typedef size_t (*ios_sz_fn)(void *);
+    typedef size_t (*ios_plane_sz_fn)(void *, size_t);
+    static ios_base_fn get_base;
+    static ios_plane_base_fn get_plane_base;
+    static ios_sz_fn get_bpr;
+    static ios_plane_sz_fn get_plane_bpr;
+    static ios_sz_fn get_bpe;
+    void *pixels;
+    size_t bpr = 0, bpe = 4;
+    GLint unpack_row;
+    GLenum glerr;
+    CGLError cerr;
+    GLenum tex_target = target;
+    GLenum up_format = format;
+    GLenum up_type = type;
+    GLint up_internal = (GLint) internal_format;
+    const char *ver;
+    int is_es = 0;
+
+    fprintf(stderr,
+            "cgl_iosurface_teximage_v1 enter ctx=%p tgt=0x%x ifmt=0x%x %dx%d "
+            "fmt=0x%x type=0x%x plane=%u surf=%p\n",
+            (void *) ctx, (unsigned) target, (unsigned) internal_format,
+            (int) width, (int) height, (unsigned) format, (unsigned) type,
+            (unsigned) plane, ioSurface);
+    fflush(stderr);
+
+    if (!ioSurface)
+        return kCGLBadAddress;
+    if (!target)
+        target = GL_TEXTURE_2D;
+    tex_target = target;
+    if (ctx) {
+        cerr = CGLSetCurrentContext(ctx);
+        if (cerr != kCGLNoError)
+            return cerr;
+    }
+    ver = (const char *) glGetString(GL_VERSION);
+    is_es = ver && strstr(ver, "OpenGL ES");
+    if (is_es && (tex_target == GL_TEXTURE_RECTANGLE || tex_target == 0x84F5))
+        tex_target = GL_TEXTURE_2D;
+#ifndef GL_RGBA8
+#define GL_RGBA8 0x8058
+#endif
+    if (up_internal == (GLint) GL_RGBA || up_internal == (GLint) GL_BGRA ||
+        up_internal == (GLint) 0x80E1)
+        up_internal = (GLint) GL_RGBA8;
+    if (is_es && up_type == GL_UNSIGNED_INT_8_8_8_8_REV) {
+        up_type = GL_UNSIGNED_BYTE;
+        if (up_format == GL_BGRA || up_format == 0x80E1)
+            up_format = GL_BGRA;
+    }
+    if (!get_base) {
+        get_base = (ios_base_fn) cgl_iosurface_sym("IOSurfaceGetBaseAddress");
+        get_plane_base = (ios_plane_base_fn) cgl_iosurface_sym("IOSurfaceGetBaseAddressOfPlane");
+        get_bpr = (ios_sz_fn) cgl_iosurface_sym("IOSurfaceGetBytesPerRow");
+        get_plane_bpr = (ios_plane_sz_fn) cgl_iosurface_sym("IOSurfaceGetBytesPerRowOfPlane");
+        get_bpe = (ios_sz_fn) cgl_iosurface_sym("IOSurfaceGetBytesPerElement");
+    }
+    pixels = NULL;
+    if (get_plane_base)
+        pixels = get_plane_base(ioSurface, (size_t) plane);
+    if (!pixels && get_base)
+        pixels = get_base(ioSurface);
+    if (!pixels)
+        return kCGLBadAddress;
+    if (get_plane_bpr)
+        bpr = get_plane_bpr(ioSurface, (size_t) plane);
+    if (!bpr && get_bpr)
+        bpr = get_bpr(ioSurface);
+    if (get_bpe) {
+        size_t e = get_bpe(ioSurface);
+        if (e)
+            bpe = e;
+    }
+    if (bpr < (size_t) width * bpe)
+        bpr = (size_t) width * bpe;
+    unpack_row = (GLint) (bpe ? (bpr / bpe) : width);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+#ifdef GL_UNPACK_ROW_LENGTH
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, unpack_row);
+#endif
+    if (is_es && tex_target != target) {
+        GLint bound = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+        if (bound)
+            glBindTexture(GL_TEXTURE_2D, (GLuint) bound);
+    }
+    glTexImage2D(tex_target, 0, up_internal, width, height, 0,
+                 up_format, up_type, pixels);
+    glerr = glGetError();
+    if (glerr == 0x502) {
+        /* Immutable / already-specified texture: upload in place. */
+        glTexSubImage2D(tex_target, 0, 0, 0, width, height, up_format,
+                        up_type, pixels);
+        glerr = glGetError();
+        fprintf(stderr, "cgl_iosurface_teximage_v1 subimage %dx%d glerr=0x%x\n",
+                (int) width, (int) height, (unsigned) glerr);
+        fflush(stderr);
+    }
+#ifdef GL_UNPACK_ROW_LENGTH
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+#endif
+    fprintf(stderr,
+            "cgl_iosurface_teximage_v1 ctx=%p tgt=0x%x->0x%x ifmt=0x%x %dx%d "
+            "fmt=0x%x->0x%x type=0x%x->0x%x plane=%u ptr=%p bpr=%zu es=%d ver=%s "
+            "glerr=0x%x\n",
+            (void *) ctx, (unsigned) target, (unsigned) tex_target,
+            (unsigned) internal_format, (int) width, (int) height,
+            (unsigned) format, (unsigned) up_format, (unsigned) type,
+            (unsigned) up_type, (unsigned) plane, pixels, bpr, is_es,
+            ver ? ver : "?", (unsigned) glerr);
+    fflush(stderr);
     return kCGLNoError;
 }

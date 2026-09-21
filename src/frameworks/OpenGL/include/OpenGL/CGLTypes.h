@@ -64,7 +64,14 @@ enum {
     kCGLPFARemotePBuffer = 91,
     kCGLPFAAllowOfflineRenderers = 96,
     kCGLPFAAcceleratedCompute = 97,
+    kCGLPFAOpenGLProfile = 99,
     kCGLPFAVirtualScreenCount = 128,
+};
+
+enum {
+    kCGLOGLPVersion_Legacy = 0x1000,
+    kCGLOGLPVersion_3_2_Core = 0x3200,
+    kCGLOGLPVersion_GL4_Core = 0x4100,
 };
 
 typedef uint32_t CGLPixelFormatAttribute;

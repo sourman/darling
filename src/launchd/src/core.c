@@ -205,6 +205,12 @@ static void machservice_setup(launch_data_t obj, const char *key, void *context)
 static void machservice_setup_options(launch_data_t obj, const char *key, void *context);
 static void machservice_resetport(job_t j, struct machservice *ms);
 static void machservice_stamp_port(job_t j, struct machservice *ms);
+#ifdef DARLING
+static void darling_replace_dead_machservices(job_t j);
+static void darling_revive_dead_job(job_t j);
+static void darling_revive_dead_jobs(jobmgr_t jm);
+static const char darling_keepalive_watchdog_v1[] = "keepalive_watchdog_v1";
+#endif
 static struct machservice *machservice_new(job_t j, const char *name, mach_port_t *serviceport, bool pid_local);
 static struct machservice *machservice_new_alias(job_t aj, struct machservice *orig);
 static void machservice_ignore(job_t j, struct machservice *ms);
@@ -3610,6 +3616,14 @@ job_reap(job_t j)
 {
 	bool is_system_bootstrapper = ((j->is_bootstrapper && pid1_magic) && !j->mgr->parentmgr);
 
+#ifdef DARLING
+	/* Watchdog may already have cleared j->p. A second reap would wait4(0)
+	 * (any child) and LIST_REMOVE a pid_hash entry that is gone. */
+	if (!j->p) {
+		return;
+	}
+#endif
+
 	job_log(j, LOG_DEBUG, "Reaping");
 
 	if (unlikely(j->weird_bootstrap)) {
@@ -4185,6 +4199,16 @@ job_callback_proc(job_t j, struct kevent *kev)
 
 		job_reap(j);
 
+#ifdef DARLING
+		/* PORT_DESTROYED is what clears isActive on macOS. Darling often
+		 * never delivers it, so job_active() stays "Mach service is still
+		 * active" and KeepAlive never respawns. Replace the advertised
+		 * name with a live empty receive right before dispatch. */
+		if (j && !j->anonymous) {
+			darling_replace_dead_machservices(j);
+		}
+#endif
+
 		if (j->anonymous) {
 			job_remove(j);
 			j = NULL;
@@ -4350,6 +4374,10 @@ jobmgr_callback(void *obj, struct kevent *kev)
 	case EVFILT_TIMER:
 		if (kev->ident == (uintptr_t)&sorted_calendar_events) {
 			calendarinterval_callback();
+#ifdef DARLING
+		} else if (kev->ident == (uintptr_t)darling_keepalive_watchdog_v1) {
+			darling_revive_dead_jobs(jm);
+#endif
 		} else if (kev->ident == (uintptr_t)jm) {
 			jobmgr_log(jm, LOG_DEBUG, "Shutdown timer firing.");
 			jobmgr_still_alive_with_check(jm);
@@ -6382,6 +6410,136 @@ machservice_resetport(job_t j, struct machservice *ms)
 	LIST_INSERT_HEAD(&port_hash[HASH_PORT(ms->port)], ms, port_hash_sle);
 }
 
+#ifdef DARLING
+static bool
+darling_port_is_dead(mach_port_t p)
+{
+	mach_port_type_t pt = 0;
+
+	if (p == MACH_PORT_NULL || p == MACH_PORT_DEAD) {
+		return true;
+	}
+	if (mach_port_type(mach_task_self(), p, &pt) != KERN_SUCCESS) {
+		return true;
+	}
+	return (pt & MACH_PORT_TYPE_DEAD_NAME) != 0;
+}
+
+static void
+darling_replace_dead_machservices(job_t j)
+{
+	struct machservice *msi;
+
+	if (!j) {
+		return;
+	}
+	SLIST_FOREACH(msi, &j->machservices, sle) {
+		if (!msi->recv) {
+			continue;
+		}
+		if (!msi->isActive && !darling_port_is_dead(msi->port)) {
+			continue;
+		}
+		fprintf(stderr, "keepalive_watchdog_v1 reset service=%s job=%s pid=%d port=0x%x active=%d\n",
+			msi->name, j->label ? j->label : "?", j->p, msi->port, (int)msi->isActive);
+		fflush(stderr);
+		msi->isActive = false;
+		LIST_REMOVE(msi, port_hash_sle);
+		(void)launchd_mport_close_recv(msi->port);
+		(void)launchd_mport_deallocate(msi->port);
+		msi->gen_num++;
+		if (launchd_mport_create_recv(&msi->port) != KERN_SUCCESS) {
+			continue;
+		}
+		(void)launchd_mport_make_send(msi->port);
+		LIST_INSERT_HEAD(&port_hash[HASH_PORT(msi->port)], msi, port_hash_sle);
+		(void)mach_port_set_attributes(mach_task_self(), msi->port, MACH_PORT_TEMPOWNER, NULL, 0);
+		machservice_stamp_port(j, msi);
+		machservice_watch(j, msi);
+	}
+}
+
+static void
+darling_revive_dead_job(job_t j)
+{
+	if (!j || j->anonymous) {
+		return;
+	}
+	if (j->p) {
+		int st = 0;
+		pid_t wp = waitpid(j->p, &st, WNOHANG);
+
+		if (wp == 0) {
+			if (kill(j->p, 0) == 0 || errno == EPERM) {
+				return;
+			}
+		} else if (wp == j->p) {
+			j->last_exit_status = st;
+			j->implicit_reap = true;
+		} else if (wp == -1 && errno != ECHILD && errno != ESRCH) {
+			return;
+		} else {
+			j->implicit_reap = true;
+			if (!j->last_exit_status) {
+				j->last_exit_status = W_EXITCODE(-1, SIGKILL);
+			}
+		}
+		fprintf(stderr, "keepalive_watchdog_v1 reap job=%s pid=%d wait=%d\n",
+			j->label ? j->label : "?", j->p, (int)wp);
+		fflush(stderr);
+		darling_replace_dead_machservices(j);
+		job_reap(j);
+		job_dispatch(j, false);
+		return;
+	}
+	darling_replace_dead_machservices(j);
+	job_dispatch(j, false);
+}
+
+static void
+darling_revive_dead_jobs(jobmgr_t jm)
+{
+	job_t ji;
+	jobmgr_t jmi;
+
+	if (!jm) {
+		return;
+	}
+	LIST_FOREACH(ji, &jm->jobs, sle) {
+		struct machservice *msi;
+		bool vanished = false;
+		bool corpse_port = false;
+
+		if (ji->anonymous) {
+			continue;
+		}
+		if (ji->p) {
+			int st = 0;
+			pid_t wp = waitpid(ji->p, &st, WNOHANG);
+
+			if (wp == 0 && (kill(ji->p, 0) == 0 || errno == EPERM)) {
+				continue;
+			}
+			vanished = true;
+		}
+		SLIST_FOREACH(msi, &ji->machservices, sle) {
+			if (msi->recv && (msi->isActive || darling_port_is_dead(msi->port))) {
+				if (!ji->p || vanished) {
+					corpse_port = true;
+				}
+				break;
+			}
+		}
+		if (vanished || corpse_port) {
+			darling_revive_dead_job(ji);
+		}
+	}
+	SLIST_FOREACH(jmi, &jm->submgrs, sle) {
+		darling_revive_dead_jobs(jmi);
+	}
+}
+#endif
+
 void
 machservice_stamp_port(job_t j, struct machservice *ms)
 {
@@ -7176,9 +7334,72 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 					fprintf(stderr, "job_identity_v1 notifyd import failed errno=%d\n", errno);
 				}
 			}
+
+			/*
+			 * Shellspawn-forked Comet still inherits the dead pid-1
+			 * bootstrap (task_for_pid retarget hits 0 tasks). Launch
+			 * Comet as this jobmgr's child so MachPortRendezvous
+			 * check_in uses jm_port.
+			 */
+			if (getenv("COMET_RESTORE_LAUNCH")) {
+				launch_data_t cpl = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+				if (cpl) {
+					launch_data_t cargs = launch_data_alloc(LAUNCH_DATA_ARRAY);
+					launch_data_t cenv = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+					int ai = 0;
+					launch_data_dict_insert(cpl, launch_data_new_string("ai.perplexity.comet"), LAUNCH_JOBKEY_LABEL);
+					launch_data_array_set_index(cargs, launch_data_new_string("/Applications/Comet.app/Contents/MacOS/Comet"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--no-sandbox"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--disable-dev-shm-usage"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--mute-audio"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--use-gl=angle"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--use-angle=gl"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--ignore-gpu-blocklist"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--disable-gpu-sandbox"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--disable-gpu-process-crash-limit"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--disable-hang-monitor"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--disable-timeouts-for-profiling"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--disable-features=Metal"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--user-data-dir=/tmp/comet-profile-live-agl32a"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--enable-logging=stderr"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--v=1"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("--remote-debugging-port=9234"), ai++);
+					launch_data_array_set_index(cargs, launch_data_new_string("about:blank"), ai++);
+					launch_data_dict_insert(cpl, cargs, LAUNCH_JOBKEY_PROGRAMARGUMENTS);
+					launch_data_dict_insert(cenv, launch_data_new_string(":1"), "DISPLAY");
+					launch_data_dict_insert(cenv, launch_data_new_string("/tmp/xauth"), "XAUTHORITY");
+					launch_data_dict_insert(cpl, cenv, LAUNCH_JOBKEY_ENVIRONMENTVARIABLES);
+					launch_data_dict_insert(cpl, launch_data_new_bool(true), LAUNCH_JOBKEY_RUNATLOAD);
+					launch_data_dict_insert(cpl, launch_data_new_string("/tmp/comet-launchd.out"), LAUNCH_JOBKEY_STANDARDOUTPATH);
+					launch_data_dict_insert(cpl, launch_data_new_string("/tmp/comet-launchd.err"), LAUNCH_JOBKEY_STANDARDERRORPATH);
+					fprintf(stderr, "job_identity_v1 importing comet as plist job\n");
+					fflush(stderr);
+					job_t cimported = job_import(cpl);
+					if (cimported) {
+						fprintf(stderr, "job_identity_v1 comet job=%s pid=%d anon=%d\n",
+							cimported->label, cimported->p, (int)cimported->anonymous);
+					} else {
+						fprintf(stderr, "job_identity_v1 comet import failed errno=%d\n", errno);
+					}
+					fflush(stderr);
+				}
+			}
 			fflush(stderr);
 		}
+#ifdef DARLING
+		(void)kevent_mod((uintptr_t)darling_keepalive_watchdog_v1, EVFILT_TIMER, EV_ADD, NOTE_SECONDS, 1, jmr);
+		fprintf(stderr, "keepalive_watchdog_v1 armed jm_port=0x%x\n", jmr->jm_port);
+		fflush(stderr);
+#endif
 	}
+
+#ifdef DARLING
+	if (!jm && !restore_root_bootstrap) {
+		(void)kevent_mod((uintptr_t)darling_keepalive_watchdog_v1, EVFILT_TIMER, EV_ADD, NOTE_SECONDS, 1, jmr);
+		fprintf(stderr, "keepalive_watchdog_v1 armed jm_port=0x%x\n", jmr->jm_port);
+		fflush(stderr);
+	}
+#endif
 
 	jobmgr_log(jmr, LOG_DEBUG, "Created job manager%s%s", jm ? " with parent: " : ".", jm ? jm->name : "");
 
@@ -9420,6 +9641,16 @@ job_mig_look_up2(job_t j, mach_port_t srp, name_t servicename, mach_port_t *serv
 	}
 
 	if (likely(ms)) {
+#ifdef DARLING
+		if (ms->recv && ms->job && !ms->job->anonymous &&
+		    (darling_port_is_dead(ms->port) ||
+		     (ms->job->p && kill(ms->job->p, 0) != 0 && errno == ESRCH))) {
+			fprintf(stderr, "job_lookup_v1 dead-name revive name=%s port=0x%x job=%s pid=%d\n",
+				servicename, ms->port, ms->job->label ? ms->job->label : "?", ms->job->p);
+			fflush(stderr);
+			darling_revive_dead_job(ms->job);
+		}
+#endif
 		(void)job_assumes(j, machservice_port(ms) != MACH_PORT_NULL);
 		job_log(j, LOG_DEBUG, "%sMach service lookup: %s", per_pid_lookup ? "Per PID " : "", servicename);
 		fprintf(stderr, "job_lookup_v1 name=%s kr=0 port=0x%x job=%s anon=%d\n",

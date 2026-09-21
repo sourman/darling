@@ -20,107 +20,81 @@
 #include <stdlib.h>
 #include <stdio.h>
 #import <IOSurface/IOSurface.h>
-
 #include <CoreFoundation/CoreFoundation.h>
 
-static int verbose = 0;
+#define kPixelBGRA 'BGRA'
+#define kPixelRGBA 'RGBA'
+#define kPixelBGRX 'BGRX'
+#define kPixelRGBX 'RGBX'
 
-__attribute__((constructor))
-static void initme(void) {
-    verbose = getenv("STUB_VERBOSE") != NULL;
+static int is_bgra_family(OSType fmt)
+{
+	return fmt == kPixelBGRA || fmt == kPixelRGBA || fmt == kPixelBGRX ||
+	       fmt == kPixelRGBX || fmt == 0;
 }
 
-
-IOSurfaceRef _Nullable IOSurfaceLookup(IOSurfaceID csid){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+size_t IOSurfaceGetNumberOfComponentsOfPlane(IOSurfaceRef buffer, size_t planeIndex)
+{
+	if (!buffer)
+		return 0;
+	if (planeIndex > 0 && IOSurfaceGetPlaneCount(buffer) == 0 && planeIndex != 0)
+		return 0;
+	if (planeIndex > 0 && IOSurfaceGetPlaneCount(buffer) != 0 &&
+	    planeIndex >= IOSurfaceGetPlaneCount(buffer))
+		return 0;
+	if (is_bgra_family(IOSurfaceGetPixelFormat(buffer)))
+		return 4;
+	size_t bpe = IOSurfaceGetBytesPerElementOfPlane(buffer, planeIndex);
+	return bpe ? bpe : 4;
 }
 
-
-IOSurfaceID IOSurfaceGetID(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+IOSurfaceComponentName IOSurfaceGetNameOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex)
+{
+	(void) planeIndex;
+	if (!is_bgra_family(IOSurfaceGetPixelFormat(buffer)))
+		return kIOSurfaceComponentNameUnknown;
+	/* BGRA memory order */
+	switch (componentIndex) {
+	case 0: return kIOSurfaceComponentNameBlue;
+	case 1: return kIOSurfaceComponentNameGreen;
+	case 2: return kIOSurfaceComponentNameRed;
+	case 3: return kIOSurfaceComponentNameAlpha;
+	default: return kIOSurfaceComponentNameUnknown;
+	}
 }
 
-
-size_t IOSurfaceGetAllocSize(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+IOSurfaceComponentType IOSurfaceGetTypeOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex)
+{
+	(void) buffer; (void) planeIndex; (void) componentIndex;
+	return kIOSurfaceComponentTypeUnsignedInteger;
 }
 
-
-
-size_t IOSurfaceGetNumberOfComponentsOfPlane(IOSurfaceRef buffer, size_t planeIndex){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+IOSurfaceComponentRange IOSurfaceGetRangeOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex)
+{
+	(void) buffer; (void) planeIndex; (void) componentIndex;
+	return kIOSurfaceComponentRangeFullRange;
 }
 
-
-IOSurfaceComponentName IOSurfaceGetNameOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+size_t IOSurfaceGetBitDepthOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex)
+{
+	(void) planeIndex; (void) componentIndex;
+	if (!buffer)
+		return 0;
+	size_t bpe = IOSurfaceGetBytesPerElementOfPlane(buffer, 0);
+	size_t n = IOSurfaceGetNumberOfComponentsOfPlane(buffer, 0);
+	if (n == 0)
+		return 8;
+	return (bpe * 8) / n;
 }
 
-
-IOSurfaceComponentType IOSurfaceGetTypeOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+size_t IOSurfaceGetBitOffsetOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex)
+{
+	(void) planeIndex;
+	return componentIndex * IOSurfaceGetBitDepthOfComponentOfPlane(buffer, 0, componentIndex);
 }
 
-
-IOSurfaceComponentRange IOSurfaceGetRangeOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+IOSurfaceSubsampling IOSurfaceGetSubsampling(IOSurfaceRef buffer)
+{
+	(void) buffer;
+	return kIOSurfaceSubsamplingNone;
 }
-
-
-size_t IOSurfaceGetBitDepthOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-
-size_t IOSurfaceGetBitOffsetOfComponentOfPlane(IOSurfaceRef buffer, size_t planeIndex, size_t componentIndex){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-
-IOSurfaceSubsampling IOSurfaceGetSubsampling(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-
-
-mach_port_t IOSurfaceCreateMachPort(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-
-size_t IOSurfaceGetPropertyMaximum(CFStringRef property){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-size_t IOSurfaceGetPropertyAlignment(CFStringRef property){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-
-
-size_t IOSurfaceAlignProperty(CFStringRef property, size_t value){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-
-
-Boolean IOSurfaceAllowsPixelSizeCasting(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
-}
-
-

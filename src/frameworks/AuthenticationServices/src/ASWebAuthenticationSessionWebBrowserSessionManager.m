@@ -18,17 +18,78 @@
 */
 
 #import <AuthenticationServices/ASWebAuthenticationSessionWebBrowserSessionManager.h>
+#include <objc/runtime.h>
+#include <stdio.h>
 
-@implementation ASWebAuthenticationSessionWebBrowserSessionManager
+const char asweb_shared_manager_v1[] = "asweb_shared_manager_v1";
+
+@implementation ASWebAuthenticationSessionWebBrowserSessionManager {
+	id _sessionHandler;
+}
+
++ (instancetype)sharedManager
+{
+	static ASWebAuthenticationSessionWebBrowserSessionManager *shared = nil;
+	if (shared == nil)
+		shared = [[self alloc] init];
+	fprintf(stderr, "asweb_shared_manager_v1 shared=%p class=%s\n",
+		shared, class_getName([shared class]));
+	fflush(stderr);
+	return shared;
+}
+
+- (id)sessionHandler
+{
+	return _sessionHandler;
+}
+
+- (void)setSessionHandler:(id)handler
+{
+	_sessionHandler = handler;
+	fprintf(stderr, "asweb_shared_manager_v1 setSessionHandler=%p\n", handler);
+	fflush(stderr);
+}
+
+- (BOOL)wasLaunchedByAuthenticationServices
+{
+	return NO;
+}
+
+- (void)didFinishLaunch
+{
+}
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
-    return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+	NSMethodSignature *sig = [super methodSignatureForSelector: aSelector];
+	if (sig)
+		return sig;
+	return [NSMethodSignature signatureWithObjCTypes: "v@:"];
 }
 
 - (void)forwardInvocation:(NSInvocation *)anInvocation
 {
-    NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), [self class]);
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+{
+	NSMethodSignature *sig = [super methodSignatureForSelector: aSelector];
+	if (sig)
+		return sig;
+	if (sel_isEqual(aSelector, @selector(sharedManager)))
+		return [NSMethodSignature signatureWithObjCTypes: "@@:"];
+	return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+}
+
++ (void)forwardInvocation:(NSInvocation *)anInvocation
+{
+	if (sel_isEqual([anInvocation selector], @selector(sharedManager))) {
+		id shared = [self sharedManager];
+		[anInvocation setReturnValue: &shared];
+		return;
+	}
+	NSLog(@"Stub called: %@ in %@", NSStringFromSelector([anInvocation selector]), self);
 }
 
 @end

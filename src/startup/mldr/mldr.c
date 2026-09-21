@@ -496,6 +496,59 @@ static void reexec32(char** argv)
 
 // Given that there's no proper way of passing special parameters to the binary loader
 // via execve(), we must do this via env variables
+extern char** environ;
+
+__attribute__((used)) static const char mldr_sockpath_dprefix_fallback_v1[] =
+	"mldr_sockpath_dprefix_fallback_v1";
+
+static int mldr_sockpath_ok(const char* p)
+{
+	size_t n;
+
+	if (p == NULL || p[0] != '/')
+		return 0;
+	n = strlen(p);
+	if (n < 20 || n > sizeof(__dserver_socket_address_data.sun_path) - 1)
+		return 0;
+	return strstr(p, "darlingserver.sock") != NULL;
+}
+
+static const char* mldr_pick_sockpath(void)
+{
+	static char from_dprefix[sizeof(__dserver_socket_address_data.sun_path)];
+	const char* best = NULL;
+	const char* s = getenv("__mldr_sockpath");
+	char** e;
+	size_t plen;
+
+	if (mldr_sockpath_ok(s))
+		return s;
+
+	/*
+	 * Darwin sys_execve prepends a smashed alloca copy of sun_path
+	 * (`__mldr_sockpath=/\356...`). getenv() hits that first. Scan for a
+	 * real path, then DPREFIX/.darlingserver.sock.
+	 */
+	for (e = environ; e != NULL && *e != NULL; ++e) {
+		if (strncmp(*e, "__mldr_sockpath=", 16) == 0 && mldr_sockpath_ok(*e + 16))
+			best = *e + 16;
+	}
+	if (best != NULL)
+		return best;
+
+	s = getenv("DPREFIX");
+	if (s != NULL && s[0] == '/') {
+		plen = strlen(s);
+		if (plen + sizeof("/.darlingserver.sock") <= sizeof(from_dprefix)) {
+			memcpy(from_dprefix, s, plen);
+			memcpy(from_dprefix + plen, "/.darlingserver.sock", sizeof("/.darlingserver.sock"));
+			if (mldr_sockpath_ok(from_dprefix))
+				return from_dprefix;
+		}
+	}
+	return NULL;
+}
+
 static void process_special_env(struct load_results* lr) {
 	const char* str;
 	static char root_path[4096];
@@ -507,7 +560,7 @@ static void process_special_env(struct load_results* lr) {
 		sscanf(str, "%x,%x,%x,%x", &lr->bprefs[0], &lr->bprefs[1], &lr->bprefs[2], &lr->bprefs[3]);
 	}
 
-	str = getenv("__mldr_sockpath");
+	str = mldr_pick_sockpath();
 
 	if (str != NULL) {
 		if (strlen(str) > sizeof(__dserver_socket_address_data.sun_path) - 1) {

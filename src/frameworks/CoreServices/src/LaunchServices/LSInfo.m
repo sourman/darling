@@ -21,6 +21,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 #include <LaunchServices/LaunchServices.h>
 #include <CarbonCore/MacErrors.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <sqlite3.h>
 #import <Foundation/NSString.h>
 #import <fmdb/FMDatabaseQueue.h>
@@ -324,8 +325,52 @@ CFArrayRef LSCopyAllRoleHandlersForContentType(CFStringRef inContentType, LSRole
 	return NULL;
 }
 
+static pthread_mutex_t g_lsHandlerMu = PTHREAD_MUTEX_INITIALIZER;
+static CFMutableDictionaryRef g_lsSchemeHandlers;
+
+static CFMutableDictionaryRef lsSchemeHandlers(void)
+{
+	if (!g_lsSchemeHandlers) {
+		g_lsSchemeHandlers = CFDictionaryCreateMutable(
+		        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
+		        &kCFTypeDictionaryValueCallBacks);
+		CFDictionarySetValue(g_lsSchemeHandlers, CFSTR("http"),
+		                     CFSTR("ai.perplexity.comet"));
+		CFDictionarySetValue(g_lsSchemeHandlers, CFSTR("https"),
+		                     CFSTR("ai.perplexity.comet"));
+		CFDictionarySetValue(g_lsSchemeHandlers, CFSTR("comet-external"),
+		                     CFSTR("ai.perplexity.comet"));
+	}
+	return g_lsSchemeHandlers;
+}
+
+OSStatus LSSetDefaultHandlerForURLScheme(CFStringRef inURLScheme,
+                                         CFStringRef inHandlerBundleID)
+{
+	if (!inURLScheme || !inHandlerBundleID)
+		return paramErr;
+	pthread_mutex_lock(&g_lsHandlerMu);
+	CFDictionarySetValue(lsSchemeHandlers(), inURLScheme, inHandlerBundleID);
+	pthread_mutex_unlock(&g_lsHandlerMu);
+	fprintf(stderr, "ls_default_handler_v1 set scheme=%s bid=%s\n",
+	        [(NSString *) inURLScheme UTF8String],
+	        [(NSString *) inHandlerBundleID UTF8String]);
+	fflush(stderr);
+	return noErr;
+}
+
 CFStringRef LSCopyDefaultHandlerForURLScheme(CFStringRef inURLScheme)
 {
-	puts("LSCopyDefaultHandlerForURLScheme STUB");
-	return NULL; // (could also return "" I guess)
+	CFStringRef v = NULL;
+	pthread_mutex_lock(&g_lsHandlerMu);
+	if (inURLScheme)
+		v = (CFStringRef) CFDictionaryGetValue(lsSchemeHandlers(), inURLScheme);
+	if (v)
+		CFRetain(v);
+	pthread_mutex_unlock(&g_lsHandlerMu);
+	fprintf(stderr, "ls_default_handler_v1 copy scheme=%s -> %s\n",
+	        inURLScheme ? [(NSString *) inURLScheme UTF8String] : "(nil)",
+	        v ? [(NSString *) v UTF8String] : "(nil)");
+	fflush(stderr);
+	return v;
 }

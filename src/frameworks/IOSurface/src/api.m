@@ -19,6 +19,12 @@
 
 #import <IOSurface/IOSurface.h>
 #import <IOSurface/IOSurfaceObjC.h>
+#include <stdio.h>
+
+#define IOS_LOG(fmt, ...) do { \
+	fprintf(stderr, "iosurface_sysmem_v1 " fmt "\n", ##__VA_ARGS__); \
+	fflush(stderr); \
+} while (0)
 
 CFTypeID IOSurfaceGetTypeID(void)
 {
@@ -27,12 +33,70 @@ CFTypeID IOSurfaceGetTypeID(void)
 
 IOSurfaceRef _Nullable IOSurfaceCreate(CFDictionaryRef properties)
 {
-	return (IOSurfaceRef) [[IOSurface alloc] initWithProperties: (NSDictionary*) properties];
+	IOSurfaceRef s = (IOSurfaceRef) [[IOSurface alloc] initWithProperties: (NSDictionary*) properties];
+	IOS_LOG("Create -> %p id=%u", s, s ? (unsigned) IOSurfaceGetID(s) : 0);
+	return s;
 }
 
 IOSurfaceRef _Nullable IOSurfaceLookupFromMachPort(mach_port_t port)
 {
+	IOS_LOG("LookupFromMachPort port=0x%x", (unsigned) port);
 	return (IOSurfaceRef) [[IOSurface alloc] initWithMachPort: port];
+}
+
+IOSurfaceRef _Nullable IOSurfaceLookup(IOSurfaceID csid)
+{
+	IOS_LOG("Lookup id=%u", (unsigned) csid);
+	return (IOSurfaceRef) [[IOSurface alloc] initWithSurfaceID: csid];
+}
+
+IOSurfaceID IOSurfaceGetID(IOSurfaceRef buffer)
+{
+	IOSurfaceID id = (IOSurfaceID) [(IOSurface *) buffer hash];
+	IOS_LOG("GetID %p -> %u", buffer, (unsigned) id);
+	return id;
+}
+
+size_t IOSurfaceGetAllocSize(IOSurfaceRef buffer)
+{
+	size_t n = (size_t) [(IOSurface *) buffer allocationSize];
+	IOS_LOG("GetAllocSize %p -> %zu", buffer, n);
+	return n;
+}
+
+mach_port_t IOSurfaceCreateMachPort(IOSurfaceRef buffer)
+{
+	mach_port_t p = [(IOSurface *) buffer createMachPort];
+	IOS_LOG("CreateMachPort %p -> 0x%x", buffer, (unsigned) p);
+	return p;
+}
+
+size_t IOSurfaceGetPropertyMaximum(CFStringRef property)
+{
+	(void) property;
+	return 16384;
+}
+
+size_t IOSurfaceGetPropertyAlignment(CFStringRef property)
+{
+	if (property == kIOSurfaceBytesPerRow ||
+	    property == kIOSurfaceAllocSize)
+		return 64;
+	return 16;
+}
+
+size_t IOSurfaceAlignProperty(CFStringRef property, size_t value)
+{
+	size_t a = IOSurfaceGetPropertyAlignment(property);
+	if (a < 1)
+		a = 1;
+	return (value + a - 1) & ~(a - 1);
+}
+
+Boolean IOSurfaceAllowsPixelSizeCasting(IOSurfaceRef buffer)
+{
+	(void) buffer;
+	return 1;
 }
 
 xpc_object_t IOSurfaceCreateXPCObject(IOSurfaceRef surface)
@@ -54,36 +118,50 @@ IOSurfaceRef IOSurfaceLookupFromXPCObject(xpc_object_t obj)
 
 kern_return_t IOSurfaceLock(IOSurfaceRef buffer, IOSurfaceLockOptions options, uint32_t * _Nullable seed)
 {
-	return [(IOSurface*)buffer lockWithOptions: options seed: seed];
+	kern_return_t r = [(IOSurface*)buffer lockWithOptions: options seed: seed];
+	IOS_LOG("Lock %p opts=%u -> %d", buffer, (unsigned) options, (int) r);
+	return r;
 }
 
 kern_return_t IOSurfaceUnlock(IOSurfaceRef buffer, IOSurfaceLockOptions options, uint32_t * _Nullable seed)
 {
-	return [(IOSurface*)buffer unlockWithOptions: options seed: seed];
+	kern_return_t r = [(IOSurface*)buffer unlockWithOptions: options seed: seed];
+	IOS_LOG("Unlock %p opts=%u -> %d", buffer, (unsigned) options, (int) r);
+	return r;
 }
 
 size_t IOSurfaceGetWidth(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer width];
+	size_t n = [(IOSurface*)buffer width];
+	IOS_LOG("GetWidth %p -> %zu", buffer, n);
+	return n;
 }
 
 size_t IOSurfaceGetHeight(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer height];
+	size_t n = [(IOSurface*)buffer height];
+	IOS_LOG("GetHeight %p -> %zu", buffer, n);
+	return n;
 }
 
 void *IOSurfaceGetBaseAddress(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer baseAddress];
+	void *p = [(IOSurface*)buffer baseAddress];
+	IOS_LOG("GetBaseAddress %p -> %p", buffer, p);
+	return p;
 }
 
 OSType IOSurfaceGetPixelFormat(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer pixelFormat];
+	OSType f = [(IOSurface*)buffer pixelFormat];
+	IOS_LOG("GetPixelFormat %p -> 0x%x", buffer, (unsigned) f);
+	return f;
 }
 
 void IOSurfaceSetValue(IOSurfaceRef buffer, CFStringRef key, CFTypeRef value)
 {
+	const char *ks = key ? CFStringGetCStringPtr(key, kCFStringEncodingUTF8) : "(null)";
+	IOS_LOG("SetValue %p key=%s val=%p", buffer, ks ? ks : "?", value);
 	return [(IOSurface*)buffer setAttachment: (id) value forKey: (NSString*) key];
 }
 
@@ -119,7 +197,9 @@ void IOSurfaceRemoveAllValues(IOSurfaceRef buffer)
 
 size_t IOSurfaceGetBytesPerRow(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer bytesPerRow];
+	size_t n = [(IOSurface*)buffer bytesPerRow];
+	IOS_LOG("GetBytesPerRow %p -> %zu", buffer, n);
+	return n;
 }
 
 void IOSurfaceIncrementUseCount(IOSurfaceRef buffer)
@@ -141,7 +221,9 @@ int32_t IOSurfaceGetUseCount(IOSurfaceRef buffer)
 
 size_t IOSurfaceGetPlaneCount(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer planeCount];
+	size_t n = [(IOSurface*)buffer planeCount];
+	IOS_LOG("GetPlaneCount %p -> %zu", buffer, n);
+	return n;
 }
 
 uint32_t IOSurfaceGetSeed(IOSurfaceRef buffer)
@@ -198,13 +280,13 @@ size_t IOSurfaceGetBytesPerElement(IOSurfaceRef buffer)
 
 size_t IOSurfaceGetElementWidth(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer widthOfPlaneAtIndex: 0];
+	return [(IOSurface*)buffer elementWidth];
 }
 
 
 size_t IOSurfaceGetElementHeight(IOSurfaceRef buffer)
 {
-	return [(IOSurface*)buffer heightOfPlaneAtIndex: 0];
+	return [(IOSurface*)buffer elementHeight];
 }
 
 Boolean IOSurfaceIsInUse(IOSurfaceRef buffer)

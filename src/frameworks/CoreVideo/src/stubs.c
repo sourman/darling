@@ -21,15 +21,6 @@ void* CVBufferSetAttachment(void)
 	return NULL;
 }
 
-void* CVDisplayLinkGetCurrentTime(void)
-{
-	return NULL;
-}
-
-void* CVDisplayLinkRetain(void)
-{
-	return NULL;
-}
 
 void* CVImageBufferGetCleanRect(void)
 {

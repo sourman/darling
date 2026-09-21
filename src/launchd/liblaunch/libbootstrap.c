@@ -31,6 +31,9 @@
 #include <sys/types.h>
 #include <sys/syslog.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <string.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -38,12 +41,125 @@
 
 #include "job.h"
 
+__attribute__((used)) const char darling_bootstrap_adopt_v1[] = "darling_bootstrap_adopt_v1";
+
+#ifndef MACH_SEND_INVALID_DEST
+#define MACH_SEND_INVALID_DEST ((kern_return_t)0x10000003)
+#endif
+
+static mach_port_t
+darling_adopt_live_bootstrap(void)
+{
+	DIR *d;
+	struct dirent *ent;
+	pid_t self = getpid();
+	pid_t best_pid = 0;
+	int best_score = 0;
+	mach_port_t adopted = MACH_PORT_NULL;
+
+	d = opendir("/proc");
+	if (!d) {
+		return MACH_PORT_NULL;
+	}
+	while ((ent = readdir(d)) != NULL) {
+		char path[64];
+		char cmd[512];
+		int fd, n, score = 0;
+		pid_t pid;
+		char *end = NULL;
+
+		if (ent->d_name[0] < '1' || ent->d_name[0] > '9') {
+			continue;
+		}
+		pid = (pid_t)strtol(ent->d_name, &end, 10);
+		if (!end || *end || pid <= 0 || pid == self) {
+			continue;
+		}
+		snprintf(path, sizeof(path), "/proc/%d/cmdline", (int)pid);
+		fd = open(path, O_RDONLY);
+		if (fd < 0) {
+			continue;
+		}
+		n = (int)read(fd, cmd, sizeof(cmd) - 1);
+		close(fd);
+		if (n <= 0) {
+			continue;
+		}
+		cmd[n] = 0;
+		for (int i = 0; i < n; i++) {
+			if (cmd[i] == 0) {
+				cmd[i] = ' ';
+			}
+		}
+		if (strstr(cmd, "extglob") || strstr(cmd, "watch-gpu") || strstr(cmd, "darlingserver")) {
+			continue;
+		}
+		if (strstr(cmd, "/usr/sbin/iokitd")) {
+			score = 2;
+		} else if (strstr(cmd, "/sbin/launchd")) {
+			score = 1;
+		} else {
+			continue;
+		}
+		if (score > best_score || (score == best_score && pid > best_pid)) {
+			best_score = score;
+			best_pid = pid;
+		}
+	}
+	closedir(d);
+
+	if (best_pid > 0) {
+		task_t donor = MACH_PORT_NULL;
+		mach_port_t cand = MACH_PORT_NULL;
+		if (task_for_pid(mach_task_self(), best_pid, &donor) == KERN_SUCCESS) {
+			if (task_get_special_port(donor, TASK_BOOTSTRAP_PORT, &cand) == KERN_SUCCESS
+			    && MACH_PORT_VALID(cand)) {
+				audit_token_t au_tok;
+				uuid_t inst;
+				mach_port_t probe = MACH_PORT_NULL;
+				kern_return_t pkr;
+
+				memset(&au_tok, 0, sizeof(au_tok));
+				memset(inst, 0, sizeof(inst));
+				pkr = vproc_mig_look_up2(cand, "org.darlinghq.iokitd", &probe, &au_tok, 0, inst, 0);
+				if (pkr == 0 && MACH_PORT_VALID(probe)) {
+					mach_port_deallocate(mach_task_self(), probe);
+					if (task_set_special_port(mach_task_self(), TASK_BOOTSTRAP_PORT, cand) == KERN_SUCCESS) {
+						bootstrap_port = cand;
+						adopted = cand;
+						fprintf(stderr, "darling_bootstrap_adopt_v1 pid=%d from_pid=%d score=%d bp=0x%x\n",
+							(int)self, (int)best_pid, best_score, cand);
+						fflush(stderr);
+					}
+				} else {
+					mach_port_deallocate(mach_task_self(), cand);
+				}
+			}
+			mach_port_deallocate(mach_task_self(), donor);
+		}
+	}
+	return adopted;
+}
+
+static mach_port_t
+darling_usable_bootstrap(mach_port_t bp)
+{
+	if (MACH_PORT_VALID(bp)) {
+		return bp;
+	}
+	if (MACH_PORT_VALID(bootstrap_port)) {
+		return bootstrap_port;
+	}
+	return darling_adopt_live_bootstrap();
+}
+
 void
 bootstrap_init(void)
 {
 	kern_return_t kr = task_get_special_port(task_self_trap(), TASK_BOOTSTRAP_PORT, &bootstrap_port);
-	if (kr != KERN_SUCCESS) {
-		abort();
+	if (kr != KERN_SUCCESS || !MACH_PORT_VALID(bootstrap_port)) {
+		bootstrap_port = MACH_PORT_NULL;
+		(void)darling_adopt_live_bootstrap();
 	}
 }
 
@@ -137,8 +253,21 @@ kern_return_t
 bootstrap_check_in(mach_port_t bp, const name_t service_name, mach_port_t *sp)
 {
 	uuid_t junk;
+	kern_return_t kr;
+	mach_port_t use = darling_usable_bootstrap(bp);
+
 	(void)bzero(junk, sizeof(junk));
-	return vproc_mig_check_in2(bp, (char *)service_name, sp, junk, 0);
+	kr = vproc_mig_check_in2(use, (char *)service_name, sp, junk, 0);
+	if (kr == MACH_SEND_INVALID_DEST || kr == MACH_SEND_INVALID_RIGHT) {
+		use = darling_adopt_live_bootstrap();
+		if (MACH_PORT_VALID(use)) {
+			kr = vproc_mig_check_in2(use, (char *)service_name, sp, junk, 0);
+		}
+	}
+	fprintf(stderr, "darling_bootstrap_adopt_v1 check_in pid=%d bp_in=0x%x bp_use=0x%x name=%s kr=%d port=0x%x\n",
+		(int)getpid(), bp, use, service_name ? service_name : "(null)", (int)kr, sp ? *sp : 0);
+	fflush(stderr);
+	return kr;
 }
 
 kern_return_t
@@ -201,6 +330,7 @@ bootstrap_look_up3(mach_port_t bp, const name_t service_name, mach_port_t *sp, p
 	kern_return_t kr = 0;
 	mach_port_t puc;
 
+	bp = darling_usable_bootstrap(bp);
 	fprintf(stderr, "bootstrap_lookup_v1 pid=%d bp=0x%x name=%s target_pid=%d flags=0x%llx\n",
 		(int)getpid(), bp, service_name ? service_name : "(null)",
 		(int)target_pid, (unsigned long long)flags);
@@ -208,7 +338,14 @@ bootstrap_look_up3(mach_port_t bp, const name_t service_name, mach_port_t *sp, p
 
 	// We have to cast instance_id here because the MIG-generated method
 	// doesn't expect a const parameter.
-	if ((kr = vproc_mig_look_up2(bp, (char *)service_name, sp, &au_tok, target_pid, (unsigned char*)instance_id, flags)) != VPROC_ERR_TRY_PER_USER) {
+	kr = vproc_mig_look_up2(bp, (char *)service_name, sp, &au_tok, target_pid, (unsigned char*)instance_id, flags);
+	if (kr == MACH_SEND_INVALID_DEST || kr == MACH_SEND_INVALID_RIGHT) {
+		bp = darling_adopt_live_bootstrap();
+		if (MACH_PORT_VALID(bp)) {
+			kr = vproc_mig_look_up2(bp, (char *)service_name, sp, &au_tok, target_pid, (unsigned char*)instance_id, flags);
+		}
+	}
+	if (kr != VPROC_ERR_TRY_PER_USER) {
 		fprintf(stderr, "bootstrap_lookup_v1 pid=%d name=%s kr=%d port=0x%x\n",
 			(int)getpid(), service_name ? service_name : "(null)",
 			(int)kr, sp ? *sp : 0);

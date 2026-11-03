@@ -18,8 +18,34 @@
 */
 
 #import <OpenDirectory/ODQuery.h>
+#import <OpenDirectory/ODNode.h>
 
 @implementation ODQuery
+
++ (ODQuery *)queryWithNode:(ODNode *)inNode forRecordTypes:(id)inRecordTypeOrList attribute:(ODAttributeType)inAttribute
+                 matchType:(ODMatchType)inMatchType queryValues:(id)inQueryValueOrList
+          returnAttributes:(id)inReturnAttributeOrList maximumResults:(NSInteger)inMaximumResults
+                     error:(NSError **)outError
+{
+    (void)inNode;
+    (void)inRecordTypeOrList;
+    (void)inAttribute;
+    (void)inMatchType;
+    (void)inQueryValueOrList;
+    (void)inReturnAttributeOrList;
+    (void)inMaximumResults;
+    if (outError != NULL)
+        *outError = nil;
+    return [[[self alloc] init] autorelease];
+}
+
+- (NSArray *)resultsAllowingPartial:(BOOL)inAllowPartialResults error:(NSError **)outError
+{
+    (void)inAllowPartialResults;
+    if (outError != NULL)
+        *outError = nil;
+    return [NSArray array];
+}
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {

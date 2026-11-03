@@ -23,6 +23,39 @@
 
 @implementation ODSession
 
++ (ODSession *)defaultSession
+{
+    static ODSession *shared;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        shared = [[ODSession alloc] init];
+    });
+    return shared;
+}
+
++ (instancetype)sessionWithOptions:(NSDictionary *)inOptions error:(NSError **)outError
+{
+    (void)inOptions;
+    if (outError != NULL)
+        *outError = nil;
+    return [[[self alloc] init] autorelease];
+}
+
+- (instancetype)initWithOptions:(NSDictionary *)inOptions error:(NSError **)outError
+{
+    (void)inOptions;
+    if (outError != NULL)
+        *outError = nil;
+    return [self init];
+}
+
+- (NSArray *)nodeNamesAndReturnError:(NSError **)outError
+{
+    if (outError != NULL)
+        *outError = nil;
+    return [NSArray arrayWithObject:@"/Local/Default"];
+}
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
     return [NSMethodSignature signatureWithObjCTypes: "v@:"];

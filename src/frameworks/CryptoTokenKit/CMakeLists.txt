@@ -34,6 +34,7 @@ add_framework(CryptoTokenKit
 	DEPENDENCIES
 		system
 		CoreFoundation
+		Foundation
 )
 
 # Comet dyld compatibility stubs

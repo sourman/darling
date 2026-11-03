@@ -2,8 +2,6 @@
 __attribute__((visibility("default"), used)) void CVBufferCopyAttachment(void) {}
 __attribute__((visibility("default"), used)) void CVBufferHasAttachment(void) {}
 __attribute__((visibility("default"), used)) void CVBufferSetAttachment(void) {}
-__attribute__((visibility("default"), used)) void CVDisplayLinkGetCurrentTime(void) {}
-__attribute__((visibility("default"), used)) void CVDisplayLinkRetain(void) {}
 __attribute__((visibility("default"), used)) void CVImageBufferGetCleanRect(void) {}
 __attribute__((visibility("default"), used)) void CVPixelBufferCreateWithIOSurface(void) {}
 __attribute__((visibility("default"), used)) void CVPixelBufferGetBytesPerRow(void) {}

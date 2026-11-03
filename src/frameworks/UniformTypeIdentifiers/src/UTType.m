@@ -19,7 +19,80 @@
 
 #import <UniformTypeIdentifiers/UTType.h>
 
-@implementation UTType
+@implementation UTType {
+    NSString *_identifier;
+    NSString *_mimeType;
+    NSString *_filenameExtension;
+}
+
+static UTType *UTTypeHTMLType;
+static UTType *UTTypePlainTextType;
+static UTType *UTTypePDFType;
+static UTType *UTTypeTextType;
+static UTType *UTTypeDataType;
+
+static UTType *UTTypeCreate(NSString *identifier, NSString *mimeType, NSString *filenameExtension) {
+    UTType *type = [[UTType alloc] init];
+    type->_identifier = [identifier copy];
+    type->_mimeType = [mimeType copy];
+    type->_filenameExtension = [filenameExtension copy];
+    return type;
+}
+
++ (void)initialize {
+    if (self != [UTType class])
+        return;
+    UTTypeHTMLType = UTTypeCreate(@"public.html", @"text/html", @"html");
+    UTTypePlainTextType = UTTypeCreate(@"public.plain-text", @"text/plain", @"txt");
+    UTTypePDFType = UTTypeCreate(@"com.adobe.pdf", @"application/pdf", @"pdf");
+    UTTypeTextType = UTTypeCreate(@"public.text", @"text/plain", @"txt");
+    UTTypeDataType = UTTypeCreate(@"public.data", nil, nil);
+}
+
++ (UTType *)typeWithMIMEType:(NSString *)mimeType {
+    if ([mimeType isEqualToString:@"text/html"])
+        return UTTypeHTMLType;
+    if ([mimeType isEqualToString:@"text/plain"])
+        return UTTypePlainTextType;
+    if ([mimeType isEqualToString:@"application/pdf"])
+        return UTTypePDFType;
+    return UTTypeCreate(@"public.data", mimeType, nil);
+}
+
+- (NSString *)identifier {
+    return _identifier;
+}
+
+- (NSString *)preferredFilenameExtension {
+    return _filenameExtension;
+}
+
+- (BOOL)isDynamic {
+    return NO;
+}
+
+- (NSString *)preferredMIMEType {
+    return _mimeType;
+}
+
+- (BOOL)conformsToType:(UTType *)type {
+    if (type == nil)
+        return NO;
+    if (type == self)
+        return YES;
+    if (![type isKindOfClass:[UTType class]])
+        return NO;
+    if ([_identifier isEqualToString:type->_identifier])
+        return YES;
+    if (type == UTTypeDataType || [type->_identifier isEqualToString:@"public.data"])
+        return YES;
+    if ((type == UTTypeTextType || [type->_identifier isEqualToString:@"public.text"]) &&
+        ([_identifier isEqualToString:@"public.html"] ||
+         [_identifier isEqualToString:@"public.plain-text"] ||
+         [_identifier isEqualToString:@"public.text"]))
+        return YES;
+    return NO;
+}
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {

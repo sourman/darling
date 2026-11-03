@@ -1,6 +1,7 @@
 #include <CoreVideo/CVDisplayLink.h>
 #include <memory>
 #include <pthread.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
@@ -105,6 +106,7 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
 		return kCVReturnError;
 	}
 	pthread_detach(thread);
+	fprintf(stderr, "CVDisplayLinkStart scheduled\n");
 	return kCVReturnSuccess;
 }
 

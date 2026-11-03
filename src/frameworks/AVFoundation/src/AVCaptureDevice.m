@@ -21,6 +21,10 @@
 
 @implementation AVCaptureDevice
 
++ (NSInteger) authorizationStatusForMediaType: (id) mediaType {
+    return 2; /* AVAuthorizationStatusDenied */
+}
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {
     return [NSMethodSignature signatureWithObjCTypes: "v@:"];
 }

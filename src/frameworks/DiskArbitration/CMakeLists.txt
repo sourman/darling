@@ -31,3 +31,10 @@ add_framework(DiskArbitration
 		system
 		CoreFoundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET DiskArbitration_obj)
+  target_sources(DiskArbitration_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET DiskArbitration)
+  target_sources(DiskArbitration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

@@ -127,3 +127,9 @@ add_framework(AuthenticationServices
 		Foundation
 		AppKit
 )
+# Comet dyld compatibility stubs
+if(TARGET AuthenticationServices_obj)
+  target_sources(AuthenticationServices_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET AuthenticationServices)
+  target_sources(AuthenticationServices PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

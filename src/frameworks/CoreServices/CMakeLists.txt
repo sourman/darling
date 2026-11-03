@@ -88,3 +88,9 @@ set_property(TARGET CoreServices APPEND_STRING PROPERTY
 
 install(FILES SystemVersion.plist DESTINATION "libexec/darling/System/Library/CoreServices")
 install(FILES SystemVersionCompat.plist DESTINATION "libexec/darling/System/Library/CoreServices")
+# Comet dyld compatibility stubs
+if(TARGET CoreServices_obj)
+  target_sources(CoreServices_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET CoreServices)
+  target_sources(CoreServices PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

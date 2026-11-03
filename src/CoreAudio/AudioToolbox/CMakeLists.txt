@@ -65,3 +65,10 @@ set(AudioToolbox_BUILD ${CMAKE_CURRENT_BINARY_DIR}/AudioToolbox)
 
 reexport(AudioUnit AudioToolbox ${AudioToolbox_BUILD})
 
+
+# Comet dyld compatibility stubs
+if(TARGET AudioToolbox_obj)
+  target_sources(AudioToolbox_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET AudioToolbox)
+  target_sources(AudioToolbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

@@ -789,9 +789,15 @@ pid_t spawnInitProcess(void)
 		exit(1);
 	}
 
-	if (unshare(CLONE_NEWUTS | CLONE_NEWIPC) != 0)
+	/*
+	 * Stay in the host IPC namespace. A private one makes MIT-SHM
+	 * segments invisible to the host X server, so Mesa's swrast
+	 * XShmAttach fails ("Failed to attach to x11 shm") and the
+	 * software frame never lands.
+	 */
+	if (unshare(CLONE_NEWUTS) != 0)
 	{
-		fprintf(stderr, "Cannot unshare UTS and IPC namespaces to create darling-init: %s\n", strerror(errno));
+		fprintf(stderr, "Cannot unshare UTS namespace to create darling-init: %s\n", strerror(errno));
 		exit(1);
 	}
 

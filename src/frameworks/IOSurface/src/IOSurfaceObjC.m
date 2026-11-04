@@ -294,8 +294,15 @@ static IOSurface* surface_from_shm(uint32_t surfaceID)
 
 - (nullable instancetype)initWithSurfaceID:(IOSurfaceID)surfaceID
 {
+	IOSurface* found = surface_from_shm(surfaceID);
 	uint8_t responseBuffer[3500];
 	size_t responseLength = sizeof(responseBuffer);
+
+	if (found != nil)
+	{
+		[self release];
+		return found;
+	}
 
 	uint64_t scalar = surfaceID;
 	kern_return_t ret = IOConnectCallMethod(g_surfaceService, kIOSurfaceMethodLookupByID, &scalar, 1, NULL, 0, NULL, 0, responseBuffer, &responseLength);

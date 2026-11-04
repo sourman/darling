@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <time.h>
+#include <mach/mach_time.h>
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSWindow.h>
 #import <AppKit/NSScreen.h>
@@ -19,9 +19,13 @@ static NSString* const kRunning = @"CVDisplayLinkRunning";
 
 static void fillTimeStamp(CVTimeStamp* ts)
 {
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	uint64_t host = (uint64_t) now.tv_sec * 1000000000ull + (uint64_t) now.tv_nsec;
+	/*
+	 * Darwin CLOCK_MONOTONIC is 6. Passed to Linux that is
+	 * CLOCK_MONOTONIC_COARSE, a different clock from mach_absolute_time
+	 * (CLOCK_MONOTONIC, id 1). Chromium turns hostTime into TimeTicks with
+	 * FromMachAbsoluteTime, so hostTime has to be that same value.
+	 */
+	uint64_t host = mach_absolute_time();
 	memset(ts, 0, sizeof(*ts));
 	ts->version = 0;
 	ts->videoTimeScale = 60000;

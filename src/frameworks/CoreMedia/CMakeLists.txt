@@ -26,3 +26,10 @@ add_framework(CoreMedia
         system
         Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET CoreMedia_obj)
+  target_sources(CoreMedia_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET CoreMedia)
+  target_sources(CoreMedia PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

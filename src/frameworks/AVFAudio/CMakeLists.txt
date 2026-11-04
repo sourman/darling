@@ -77,3 +77,10 @@ add_framework(AVFAudio
 		objc
 		Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET AVFAudio_obj)
+  target_sources(AVFAudio_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET AVFAudio)
+  target_sources(AVFAudio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

@@ -27,3 +27,10 @@ add_framework(VideoToolbox
         objc
         Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET VideoToolbox_obj)
+  target_sources(VideoToolbox_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET VideoToolbox)
+  target_sources(VideoToolbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

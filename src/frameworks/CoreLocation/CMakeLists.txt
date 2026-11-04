@@ -56,3 +56,10 @@ add_framework(CoreLocation
         objc
         Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET CoreLocation_obj)
+  target_sources(CoreLocation_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET CoreLocation)
+  target_sources(CoreLocation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

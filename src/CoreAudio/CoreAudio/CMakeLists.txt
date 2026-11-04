@@ -32,3 +32,10 @@ add_framework(CoreAudio
         CoreFoundation
         pulse
 )
+
+# Comet dyld compatibility stubs
+if(TARGET CoreAudio_obj)
+  target_sources(CoreAudio_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET CoreAudio)
+  target_sources(CoreAudio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

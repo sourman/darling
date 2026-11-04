@@ -23,6 +23,10 @@
 #import <Foundation/Foundation.h>
 #import <IOKit/IOCFSerialize.h>
 #include <stdatomic.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
 
 static io_service_t g_surfaceService;
 
@@ -30,7 +34,109 @@ typedef struct
 {
 	struct _IOSurfaceObjectRetval* surface;
 	_Atomic int32_t localUseCount;
+	int shmfd;
+	size_t mapLength;
+	void* mapBase;
 } ImplData;
+
+/* Shared with every process in the prefix. The mach port handed out by
+   IOSurfaceCreateMachPort is the surface id, so IOSurfaceLookupFromMachPort
+   opens the same object. */
+static uint32_t darling_surface_id(void)
+{
+	static int fd = -1;
+	static uint32_t* counter = NULL;
+
+	if (counter == NULL)
+	{
+		fd = shm_open("/darling-iosurface-seq", O_CREAT | O_RDWR, 0666);
+		if (fd < 0)
+			return 0;
+		if (ftruncate(fd, sizeof(uint32_t)) != 0)
+			return 0;
+		counter = mmap(NULL, sizeof(uint32_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if (counter == MAP_FAILED)
+		{
+			counter = NULL;
+			return 0;
+		}
+	}
+	return __sync_add_and_fetch(counter, 1);
+}
+
+static uint32_t dict_u32(CFDictionaryRef dict, CFStringRef key)
+{
+	CFTypeRef value;
+	int64_t number = 0;
+
+	if (dict == NULL)
+		return 0;
+	value = CFDictionaryGetValue(dict, key);
+	if (value == NULL || CFGetTypeID(value) != CFNumberGetTypeID())
+		return 0;
+	CFNumberGetValue((CFNumberRef)value, kCFNumberSInt64Type, &number);
+	if (number < 0)
+		return 0;
+	return (uint32_t)number;
+}
+
+static IOSurface* surface_from_shm(uint32_t surfaceID)
+{
+	char name[64];
+	int fd;
+	struct {
+		uint32_t magic;
+		uint32_t id;
+		uint32_t width;
+		uint32_t height;
+		uint32_t bytesPerRow;
+		uint32_t bytesPerElement;
+		uint32_t pixelFormat;
+		uint32_t allocSize;
+	} header;
+	void* mapping;
+	size_t mapLength;
+	struct _IOSurfaceObjectRetval* response;
+	IOSurface* surface;
+	ImplData* impl;
+
+	snprintf(name, sizeof(name), "/darling-iosurf-%u", surfaceID);
+	fd = shm_open(name, O_RDWR, 0666);
+	if (fd < 0)
+		return nil;
+
+	if (pread(fd, &header, sizeof(header), 0) != (ssize_t)sizeof(header) || header.magic != 0x46534F49 || header.id != surfaceID)
+	{
+		close(fd);
+		return nil;
+	}
+	mapLength = 4096u + header.allocSize;
+	mapping = mmap(NULL, mapLength, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (mapping == MAP_FAILED)
+	{
+		close(fd);
+		return nil;
+	}
+
+	response = calloc(1, sizeof(*response));
+	response->surfaceID = surfaceID;
+	response->pixelFormat = header.pixelFormat;
+	response->address = (uint64_t)((uint8_t*)mapping + 4096);
+	response->planeCount = 1;
+	response->planes[0].memoryOffset = 0;
+	response->planes[0].bytesPerElement = header.bytesPerElement;
+	response->planes[0].width = header.width;
+	response->planes[0].height = header.height;
+	response->planes[0].bytesPerRow = header.bytesPerRow;
+
+	surface = [[IOSurface alloc] initWithResponse: response length: sizeof(*response)];
+	impl = (ImplData*)surface->_impl;
+	impl->shmfd = fd;
+	impl->mapLength = mapLength;
+	impl->mapBase = mapping;
+	free(response);
+	return surface;
+}
 
 @implementation IOSurface
 
@@ -40,19 +146,38 @@ typedef struct
 	{
 		CFMutableDictionaryRef matching = IOServiceNameMatching("IOSurfaceRoot");
 
+		/* IOServiceGetMatchingService releases the matching dictionary. */
 		g_surfaceService = IOServiceGetMatchingService(kIOMasterPortDefault, matching);
-
-		CFRelease(matching);
 
 		if (!g_surfaceService)
 			NSLog(@"Cannot obtain IOSurfaceRoot!\n");
 	}
 }
 
+- (nullable instancetype)initWithMachPort:(mach_port_t)port
+{
+	IOSurface* found;
+
+	mach_port_context_t context = 0;
+
+	if (port == MACH_PORT_NULL)
+	{
+		[self release];
+		return nil;
+	}
+	if (mach_port_get_context(mach_task_self(), port, &context) == KERN_SUCCESS && context != 0)
+		found = surface_from_shm((uint32_t)context);
+	else
+		found = surface_from_shm((uint32_t)port);
+	[self release];
+	return found;
+}
+
 - (nullable instancetype)initWithResponse:(const void*)bytes length:(size_t)length
 {
-	ImplData* idata = (ImplData*) malloc(sizeof(ImplData));
+	ImplData* idata = (ImplData*) calloc(1, sizeof(ImplData));
 	idata->surface = malloc(length);
+	idata->shmfd = -1;
 	memcpy(idata->surface, bytes, length);
 
 	idata->localUseCount = 0;
@@ -63,29 +188,121 @@ typedef struct
 
 - (nullable instancetype)initWithProperties:(NSDictionary <IOSurfacePropertyKey, id> *)properties
 {
-	CFDataRef data = IOCFSerialize((CFTypeRef) properties, kIOCFSerializeToBinary);
-	uint8_t responseBuffer[3500];
+	CFDictionaryRef dict = (CFDictionaryRef)properties;
+	uint32_t width = dict_u32(dict, kIOSurfaceWidth);
+	uint32_t height = dict_u32(dict, kIOSurfaceHeight);
+	uint32_t bytesPerElement = dict_u32(dict, kIOSurfaceBytesPerElement);
+	uint32_t bytesPerRow = dict_u32(dict, kIOSurfaceBytesPerRow);
+	uint32_t pixelFormat = dict_u32(dict, kIOSurfacePixelFormat);
+	uint32_t allocSize = dict_u32(dict, kIOSurfaceAllocSize);
+	uint32_t surfaceID;
+	char name[64];
+	int fd;
+	size_t mapLength;
+	void* mapping;
+	struct {
+		uint32_t magic;
+		uint32_t id;
+		uint32_t width;
+		uint32_t height;
+		uint32_t bytesPerRow;
+		uint32_t bytesPerElement;
+		uint32_t pixelFormat;
+		uint32_t allocSize;
+	} header;
+	struct _IOSurfaceObjectRetval* response;
+	IOSurface* created;
+	ImplData* impl;
 
-	const void* bytes = CFDataGetBytePtr(data);
-	size_t length = CFDataGetLength(data);
-	size_t responseLength = sizeof(responseBuffer);
-
-	kern_return_t ret = IOConnectCallMethod(g_surfaceService, kIOSurfaceMethodCreate, NULL, 0, bytes, length, NULL, 0, responseBuffer, &responseLength);
-	CFRelease(data);
-
-	if (ret != kIOSurfaceSuccess)
+	if (bytesPerElement == 0)
+		bytesPerElement = 4;
+	if (bytesPerRow == 0 && width != 0)
+		bytesPerRow = (width * bytesPerElement + 15u) & ~15u;
+	if (allocSize == 0 && bytesPerRow != 0 && height != 0)
+		allocSize = bytesPerRow * height;
+	if (width == 0 || height == 0 || bytesPerRow == 0 || allocSize == 0)
 	{
 		[self release];
 		return nil;
 	}
 
-	return [self initWithResponse: responseBuffer length: responseLength];
+	surfaceID = darling_surface_id();
+	if (surfaceID == 0)
+	{
+		[self release];
+		return nil;
+	}
+	snprintf(name, sizeof(name), "/darling-iosurf-%u", surfaceID);
+	fd = shm_open(name, O_CREAT | O_RDWR, 0666);
+	if (fd < 0)
+	{
+		[self release];
+		return nil;
+	}
+	mapLength = 4096u + allocSize;
+	if (ftruncate(fd, (off_t)mapLength) != 0)
+	{
+		close(fd);
+		shm_unlink(name);
+		[self release];
+		return nil;
+	}
+	mapping = mmap(NULL, mapLength, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (mapping == MAP_FAILED)
+	{
+		close(fd);
+		shm_unlink(name);
+		[self release];
+		return nil;
+	}
+	memset(&header, 0, sizeof(header));
+	header.magic = 0x46534F49;
+	header.id = surfaceID;
+	header.width = width;
+	header.height = height;
+	header.bytesPerRow = bytesPerRow;
+	header.bytesPerElement = bytesPerElement;
+	header.pixelFormat = pixelFormat;
+	header.allocSize = allocSize;
+	memcpy(mapping, &header, sizeof(header));
+
+	response = calloc(1, sizeof(*response));
+	response->surfaceID = surfaceID;
+	response->pixelFormat = pixelFormat;
+	response->address = (uint64_t)((uint8_t*)mapping + 4096);
+	response->planeCount = 1;
+	response->planes[0].bytesPerElement = bytesPerElement;
+	response->planes[0].width = width;
+	response->planes[0].height = height;
+	response->planes[0].bytesPerRow = bytesPerRow;
+
+	created = [self initWithResponse: response length: sizeof(*response)];
+	free(response);
+	if (created == nil)
+	{
+		munmap(mapping, mapLength);
+		close(fd);
+		shm_unlink(name);
+		return nil;
+	}
+	impl = (ImplData*)created->_impl;
+	impl->shmfd = fd;
+	impl->mapLength = mapLength;
+	impl->mapBase = mapping;
+	return created;
 }
 
 - (nullable instancetype)initWithSurfaceID:(IOSurfaceID)surfaceID
 {
+	IOSurface* found = surface_from_shm(surfaceID);
 	uint8_t responseBuffer[3500];
 	size_t responseLength = sizeof(responseBuffer);
+
+	if (found != nil)
+	{
+		[self release];
+		return found;
+	}
 
 	uint64_t scalar = surfaceID;
 	kern_return_t ret = IOConnectCallMethod(g_surfaceService, kIOSurfaceMethodLookupByID, &scalar, 1, NULL, 0, NULL, 0, responseBuffer, &responseLength);
@@ -104,12 +321,16 @@ typedef struct
 	ImplData* data = (ImplData*) _impl;
 	if (data != NULL)
 	{
+		if (data->mapBase != NULL)
+			munmap(data->mapBase, data->mapLength);
 		if (data->surface != NULL)
 		{
-			IOConnectCallMethod(g_surfaceService, kIOSurfaceMethodRelease, NULL, 0, &data->surface->surfaceID, 1, NULL, 0, NULL, 0);
-
+			if (data->shmfd < 0)
+				IOConnectCallMethod(g_surfaceService, kIOSurfaceMethodRelease, NULL, 0, &data->surface->surfaceID, 1, NULL, 0, NULL, 0);
 			free(data->surface);
 		}
+		if (data->shmfd >= 0)
+			close(data->shmfd);
 
 		free(data);
 	}
@@ -265,6 +486,12 @@ typedef struct
 - (kern_return_t)lockWithOptions:(IOSurfaceLockOptions)options seed:(nullable uint32_t *)seed
 {
 	ImplData* data = (ImplData*) _impl;
+	if (data->shmfd >= 0)
+	{
+		if (seed != NULL)
+			*seed = 0;
+		return kIOSurfaceSuccess;
+	}
 	struct _IOSurfaceLockUnlock args = {
 		.surfaceID = data->surface->surfaceID,
 		.options = options,
@@ -275,6 +502,12 @@ typedef struct
 - (kern_return_t)unlockWithOptions:(IOSurfaceLockOptions)options seed:(nullable uint32_t *)seed
 {
 	ImplData* data = (ImplData*) _impl;
+	if (data->shmfd >= 0)
+	{
+		if (seed != NULL)
+			*seed = 1;
+		return kIOSurfaceSuccess;
+	}
 	struct _IOSurfaceLockUnlock args = {
 		.surfaceID = data->surface->surfaceID,
 		.options = options,

@@ -31,3 +31,10 @@ add_framework(CoreVideo
         cxx
 )
 
+
+# Comet dyld compatibility stubs
+if(TARGET CoreVideo_obj)
+  target_sources(CoreVideo_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET CoreVideo)
+  target_sources(CoreVideo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

@@ -21,6 +21,14 @@
 
 @implementation ODRecord
 
+- (BOOL)isMemberRecord:(ODRecord *)inRecord error:(NSError **)outError
+{
+    (void)inRecord;
+    if (outError != NULL)
+        *outError = nil;
+    return NO;
+}
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
     return [NSMethodSignature signatureWithObjCTypes: "v@:"];

@@ -333,3 +333,10 @@ add_framework(Vision
         objc
         Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET Vision_obj)
+  target_sources(Vision_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET Vision)
+  target_sources(Vision PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

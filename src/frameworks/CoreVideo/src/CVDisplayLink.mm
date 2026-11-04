@@ -81,18 +81,25 @@ static void fireDisplayLink(NSMutableDictionary* self)
 		uint64_t registered = 0;
 		uint64_t fire_id = 0;
 		logged++;
+		uintptr_t task_runner = 0;
+		uintptr_t sequence = 0;
 		if (userInfo != NULL) {
 			display_id = *(uint32_t *)((char *)userInfo + 0x0c);
 			registered = *(uint64_t *)((char *)userInfo + 0x10);
+			task_runner = *(uintptr_t *)((char *)userInfo + 0x48);
+			if (task_runner > 0x1000)
+				sequence = *(uintptr_t *)(task_runner + 0x10);
 		}
 		pthread_threadid_np(NULL, &fire_id);
-		fprintf(stderr, "CVDisplayLink fire callback %p scale %d period %lld host %llu flags %llx display %u registered %llu fire %llu\n",
+		fprintf(stderr, "CVDisplayLink fire callback %p scale %d period %lld host %llu flags %llx display %u registered %llu fire %llu runner %lx sequence %lx\n",
 				callback, now.videoTimeScale,
 				(long long) now.videoRefreshPeriod,
 				(unsigned long long) now.hostTime,
 				(unsigned long long) now.flags,
 				display_id, (unsigned long long) registered,
-				(unsigned long long) fire_id);
+				(unsigned long long) fire_id,
+				(unsigned long) task_runner,
+				(unsigned long) sequence);
 		fflush(stderr);
 	}
 	callback((CVDisplayLinkRef) self, &now, &output, 0, &flagsOut, userInfo);

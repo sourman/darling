@@ -40,18 +40,30 @@ static void fillTimeStamp(CVTimeStamp* ts)
 static void fireDisplayLink(NSMutableDictionary* self)
 {
 	NSNumber* callbackNumber = [self objectForKey: kOutputCallback];
-	if (callbackNumber == nil)
+	if (callbackNumber == nil) {
+		fprintf(stderr, "CVDisplayLink fire skipped: no callback\n");
+		fflush(stderr);
 		return;
+	}
 	CVDisplayLinkOutputCallback callback =
 			(CVDisplayLinkOutputCallback) [callbackNumber unsignedLongValue];
-	if (callback == NULL)
+	if (callback == NULL) {
+		fprintf(stderr, "CVDisplayLink fire skipped: null callback\n");
+		fflush(stderr);
 		return;
+	}
 	void* userInfo = (void*) [[self objectForKey: kOutputUserInfo] unsignedLongValue];
 	CVTimeStamp now;
 	CVTimeStamp output;
 	fillTimeStamp(&now);
 	output = now;
 	CVOptionFlags flagsOut = 0;
+	static int logged;
+	if (logged < 4) {
+		logged++;
+		fprintf(stderr, "CVDisplayLink fire callback %p\n", callback);
+		fflush(stderr);
+	}
 	callback((CVDisplayLinkRef) self, &now, &output, 0, &flagsOut, userInfo);
 }
 

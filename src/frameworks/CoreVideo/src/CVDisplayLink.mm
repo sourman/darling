@@ -76,13 +76,23 @@ static void fireDisplayLink(NSMutableDictionary* self)
 			kCVTimeStampRateScalarValid | kCVTimeStampVideoRefreshPeriodValid;
 	output = now;
 	static int logged;
-	if (logged < 2) {
+	if (logged < 4) {
+		uint32_t display_id = 0;
+		uint64_t registered = 0;
+		uint64_t fire_id = 0;
 		logged++;
-		fprintf(stderr, "CVDisplayLink fire callback %p scale %d period %lld host %llu flags %llx\n",
+		if (userInfo != NULL) {
+			display_id = *(uint32_t *)((char *)userInfo + 0x0c);
+			registered = *(uint64_t *)((char *)userInfo + 0x10);
+		}
+		pthread_threadid_np(NULL, &fire_id);
+		fprintf(stderr, "CVDisplayLink fire callback %p scale %d period %lld host %llu flags %llx display %u registered %llu fire %llu\n",
 				callback, now.videoTimeScale,
 				(long long) now.videoRefreshPeriod,
 				(unsigned long long) now.hostTime,
-				(unsigned long long) now.flags);
+				(unsigned long long) now.flags,
+				display_id, (unsigned long long) registered,
+				(unsigned long long) fire_id);
 		fflush(stderr);
 	}
 	callback((CVDisplayLinkRef) self, &now, &output, 0, &flagsOut, userInfo);

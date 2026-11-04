@@ -20,8 +20,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #import <IOSurface/IOSurface.h>
+#import <IOSurface/IOSurfaceObjC.h>
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <mach/mach.h>
 
 static int verbose = 0;
 
@@ -32,20 +34,19 @@ static void initme(void) {
 
 
 IOSurfaceRef _Nullable IOSurfaceLookup(IOSurfaceID csid){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+    return (IOSurfaceRef)[[IOSurface alloc] initWithMachPort: (mach_port_t)csid];
 }
 
 
 IOSurfaceID IOSurfaceGetID(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+    return (IOSurfaceID)[(IOSurface*)buffer hash];
 }
 
 
 size_t IOSurfaceGetAllocSize(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+    size_t rows = [(IOSurface*)buffer bytesPerRow];
+    size_t height = [(IOSurface*)buffer height];
+    return rows * height;
 }
 
 
@@ -94,8 +95,21 @@ IOSurfaceSubsampling IOSurfaceGetSubsampling(IOSurfaceRef buffer){
 
 
 mach_port_t IOSurfaceCreateMachPort(IOSurfaceRef buffer){
-    if (verbose) printf("STUB: %s called\n", __FUNCTION__);
-    return 0;
+    mach_port_t port = MACH_PORT_NULL;
+    IOSurfaceID surfaceID = IOSurfaceGetID(buffer);
+    kern_return_t kr;
+
+    if (surfaceID == 0)
+        return MACH_PORT_NULL;
+    kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port);
+    if (kr != KERN_SUCCESS)
+        return MACH_PORT_NULL;
+    kr = mach_port_insert_right(mach_task_self(), port, port, MACH_MSG_TYPE_MAKE_SEND);
+    if (kr != KERN_SUCCESS)
+        return MACH_PORT_NULL;
+    /* The context stays on the port object when the send right moves. */
+    mach_port_set_context(mach_task_self(), port, (mach_port_context_t)surfaceID);
+    return port;
 }
 
 

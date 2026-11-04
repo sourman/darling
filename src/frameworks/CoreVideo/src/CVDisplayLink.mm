@@ -58,10 +58,31 @@ static void fireDisplayLink(NSMutableDictionary* self)
 	fillTimeStamp(&now);
 	output = now;
 	CVOptionFlags flagsOut = 0;
+	/*
+	 * DisplayLinkCallback's first skip is ComputeVSyncParameters:
+	 * videoRefreshPeriod (numerator) or videoTimeScale (denominator)
+	 * of 0 returns before a BeginFrame is posted. Both have to be
+	 * nonzero, and hostTime has to be a mach absolute time.
+	 */
+	if (now.videoTimeScale == 0)
+		now.videoTimeScale = 60000;
+	if (now.videoRefreshPeriod == 0)
+		now.videoRefreshPeriod = now.videoTimeScale / 60;
+	if (now.hostTime == 0)
+		now.hostTime = mach_absolute_time();
+	if (now.hostTime == 0)
+		now.hostTime = 1;
+	now.flags |= kCVTimeStampVideoTimeValid | kCVTimeStampHostTimeValid |
+			kCVTimeStampRateScalarValid | kCVTimeStampVideoRefreshPeriodValid;
+	output = now;
 	static int logged;
-	if (logged < 4) {
+	if (logged < 2) {
 		logged++;
-		fprintf(stderr, "CVDisplayLink fire callback %p\n", callback);
+		fprintf(stderr, "CVDisplayLink fire callback %p scale %d period %lld host %llu flags %llx\n",
+				callback, now.videoTimeScale,
+				(long long) now.videoRefreshPeriod,
+				(unsigned long long) now.hostTime,
+				(unsigned long long) now.flags);
 		fflush(stderr);
 	}
 	callback((CVDisplayLinkRef) self, &now, &output, 0, &flagsOut, userInfo);

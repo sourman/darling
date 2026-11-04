@@ -87,6 +87,9 @@ CVReturn CVDisplayLinkCreateWithActiveCGDisplays(CVDisplayLinkRef* displayLinkOu
 			forKey: kDirectDisplayArray];
 
 	*displayLinkOut = (CVDisplayLinkRef) self;
+	fprintf(stderr, "CVDisplayLinkCreateWithActiveCGDisplays count=%u\n",
+			displayCount);
+	fflush(stderr);
 	return kCVReturnSuccess;
 }
 
@@ -107,6 +110,7 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
 	}
 	pthread_detach(thread);
 	fprintf(stderr, "CVDisplayLinkStart scheduled\n");
+	fflush(stderr);
 	return kCVReturnSuccess;
 }
 
@@ -142,6 +146,12 @@ CVReturn CVDisplayLinkSetOutputCallback(CVDisplayLinkRef displayLink, CVDisplayL
 			forKey: kOutputCallback];
 	[self setObject: [NSNumber numberWithUnsignedLong: (unsigned long) userInfo]
 			forKey: kOutputUserInfo];
+	fprintf(stderr, "CVDisplayLinkSetOutputCallback %p\n", callback);
+	fflush(stderr);
+	// Chromium sets the callback and then waits for a vsync. Start the
+	// thread here so a missed CVDisplayLinkStart still presents frames.
+	if (![[self objectForKey: kRunning] boolValue])
+		return CVDisplayLinkStart(displayLink);
 	return kCVReturnSuccess;
 }
 
@@ -202,6 +212,10 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
     CGDirectDisplayID displayID,
     CV_RETURNS_RETAINED_PARAMETER CVDisplayLinkRef CV_NULLABLE * CV_NONNULL displayLinkOut )
 {
+	// Chromium passes 0 here. That is kCGNullDirectDisplay, but it means
+	// "the main display" for this call; rejecting it skips the vsync thread.
+	if (displayID == kCGNullDirectDisplay)
+		displayID = CGMainDisplayID();
 	if (displayID == kCGNullDirectDisplay)
 		return kCVReturnInvalidArgument;
 
@@ -210,6 +224,8 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
 			forKey: @"CGDirectDisplay"];
 
 	*displayLinkOut = (CVDisplayLinkRef) self;
+	fprintf(stderr, "CVDisplayLinkCreateWithCGDisplay id=%u\n", displayID);
+	fflush(stderr);
 	return kCVReturnSuccess;
 }
 

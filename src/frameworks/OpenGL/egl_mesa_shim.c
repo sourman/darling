@@ -38,6 +38,7 @@ static void *(*mesa_proc)(const char *);
 static void ensure_external_context(void);
 
 static void patch_angle_gl_get_string(void);
+static void hook_glvnd_create_context(void);
 
 __attribute__((constructor))
 static void shim_loaded(void)
@@ -47,6 +48,7 @@ static void shim_loaded(void)
 	/* glGetString runs on this thread as soon as the loader returns. */
 	ensure_external_context();
 	patch_angle_gl_get_string();
+	hook_glvnd_create_context();
 }
 void (*eglGetProcAddress(const char *name))(void);
 
@@ -199,14 +201,109 @@ static const EGLint *mesa_context_attribs(const EGLint *attrib, EGLint *buf, int
 	fprintf(stderr, "\n");
 	for (i = 0; attrib[i] != EGL_NONE && i < 48 && n + 2 < cap; i += 2) {
 		EGLint k = attrib[i];
-		if (k == 0x3098 || k == 0x30FB || k == 0x30FC || k == 0x30FD ||
-		    k == 0x31B0 || k == 0x31B1 || k == 0x31B2 || k == 0x31B3 || k == 0x31BD) {
+		/* 0x31B3 (NO_ERROR) is legal EGL but this Mesa returns BAD_ATTRIBUTE. */
+		if (k == 0x3098 || k == 0x30FB) {
 			buf[n++] = k;
 			buf[n++] = attrib[i + 1];
 		}
 	}
 	buf[n] = EGL_NONE;
 	return buf;
+}
+
+/* GLVND's eglCreateContext is what the GPU calls. The shim export is not.
+ * Jump into the function after its first 12 bytes, with the attrib pointer
+ * already reduced to tokens Mesa accepts. */
+void *glvnd_slot;
+void *glvnd_continue;
+
+const EGLint *filter_ctx_attribs(const EGLint *attrib)
+{
+	static __thread EGLint buf[40];
+	if (!attrib)
+		return NULL;
+	return mesa_context_attribs(attrib, buf, 40);
+}
+
+__attribute__((naked)) static void glvnd_hook(void)
+{
+	__asm__ volatile(
+		"endbr64\n"
+		"push %rbp\n"
+		"push %rdi\n"
+		"push %rsi\n"
+		"push %rdx\n"
+		"push %rcx\n"
+		"push %r8\n"
+		"push %r9\n"
+		"sub $8, %rsp\n"
+		"mov %rcx, %rdi\n"
+		"call _filter_ctx_attribs\n"
+		"add $8, %rsp\n"
+		"pop %r9\n"
+		"pop %r8\n"
+		"pop %rcx\n"
+		"pop %rdx\n"
+		"pop %rsi\n"
+		"pop %rdi\n"
+		"mov %rax, %rcx\n"
+		"mov _glvnd_slot(%rip), %rax\n"
+		"mov (%rax), %rax\n"
+		"jmp *_glvnd_continue(%rip)\n"
+	);
+}
+
+static int prot_page(void *page)
+{
+	int (*mp)(void *, unsigned long, int) = dlsym((void *)-2, "mprotect");
+	if (!mp)
+		return -1;
+	return mp(page, 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC);
+}
+
+static void hook_glvnd_create_context(void)
+{
+	FILE *maps;
+	char line[512];
+	unsigned long start = 0, off = 0;
+	unsigned char *fn;
+	int32_t disp;
+
+	maps = fopen("/proc/self/maps", "r");
+	if (!maps)
+		return;
+	while (fgets(line, sizeof line, maps)) {
+		if (!strstr(line, "libEGL.so.1") || !strstr(line, "r-xp"))
+			continue;
+		sscanf(line, "%lx-%*x %*s %lx", &start, &off);
+		break;
+	}
+	fclose(maps);
+	if (!start) {
+		fprintf(stderr, "glvnd eglCreateContext not mapped\n");
+		return;
+	}
+	fn = (unsigned char *)(start + (0x8b20 - off));
+	if (fn[0] != 0xf3 || fn[5] != 0x48) {
+		fprintf(stderr, "glvnd prologue mismatch %02x %02x\n", fn[0], fn[5]);
+		return;
+	}
+	disp = *(int32_t *)(fn + 8);
+	glvnd_slot = fn + 12 + disp;
+	glvnd_continue = fn + 12;
+	if (prot_page((void *)((uintptr_t)fn & ~(uintptr_t)0xfff)) != 0) {
+		fprintf(stderr, "glvnd mprotect failed\n");
+		return;
+	}
+	fn[0] = 0x48;
+	fn[1] = 0xb8;
+	{
+		void *hook = (void *)glvnd_hook;
+		memcpy(fn + 2, &hook, sizeof hook);
+	}
+	fn[10] = 0xff;
+	fn[11] = 0xe0;
+	fprintf(stderr, "glvnd eglCreateContext hooked at %p\n", fn);
 }
 
 EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share, const EGLint *attrib)

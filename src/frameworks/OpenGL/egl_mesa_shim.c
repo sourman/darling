@@ -32,7 +32,14 @@ typedef unsigned int EGLBoolean;
 #define EGL_PLATFORM_SURFACELESS_MESA 0x31DD
 #define EGL_CONTEXT_CLIENT_VERSION 0x3098
 #define EGL_OPENGL_ES_API 0x30A0
+#define EGL_WIDTH 0x3057
+#define EGL_HEIGHT 0x3056
+#define EGL_DRAW 0x3059
+#define EGL_IOSURFACE_ANGLE 0x3454
 #define GL_VERSION 0x1F02
+#define GL_PACK_ALIGNMENT 0x0D05
+#define GL_BGRA 0x80E1
+#define GL_UNSIGNED_BYTE 0x1401
 
 static void *mesa;
 static void *(*mesa_proc)(const char *);
@@ -1088,6 +1095,170 @@ EGLSurface eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig config, const EGLin
 	return s;
 }
 
+/*
+ * Chromium draws the compositor frame into an IOSurface-backed pbuffer
+ * (EGL_IOSURFACE_ANGLE). Mesa has no such buffer. A plain pbuffer of the
+ * same size lets Skia initialize; the pixels are copied into the
+ * IOSurface on flush so X11CopyLayerImage can see them.
+ */
+#define IOSURF_PB_MAX 8
+static struct {
+	EGLSurface surface;
+	void *iosurface;
+	int w, h;
+} g_iosurf_pb[IOSURF_PB_MAX];
+
+static void *io_sym(const char *name)
+{
+	static void *lib;
+	if (!lib)
+		lib = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_LAZY);
+	return lib ? dlsym(lib, name) : NULL;
+}
+
+static int iosurf_index(EGLSurface s)
+{
+	int i;
+	for (i = 0; i < IOSURF_PB_MAX; i++) {
+		if (g_iosurf_pb[i].surface == s)
+			return i;
+	}
+	return -1;
+}
+
+static void copy_pb_to_iosurface(EGLSurface s)
+{
+	int i = iosurf_index(s);
+	typedef void *(*base_fn)(void *);
+	typedef size_t (*sz_fn)(void *);
+	typedef void (*read_fn)(int, int, int, int, unsigned, unsigned, void *);
+	typedef void (*store_fn)(unsigned, int);
+	base_fn base;
+	sz_fn bytes_per_row;
+	read_fn read_pixels;
+	store_fn pixel_store;
+	void *dst;
+	size_t stride;
+	int w, h, y;
+	static uint8_t *tmp;
+	static size_t tmp_bytes;
+	static int copies;
+	size_t need;
+	uint32_t first;
+
+	if (i < 0)
+		return;
+	base = io_sym("IOSurfaceGetBaseAddress");
+	bytes_per_row = io_sym("IOSurfaceGetBytesPerRow");
+	if (!base || !bytes_per_row || !mesa_proc)
+		return;
+	dst = base(g_iosurf_pb[i].iosurface);
+	stride = bytes_per_row(g_iosurf_pb[i].iosurface);
+	w = g_iosurf_pb[i].w;
+	h = g_iosurf_pb[i].h;
+	if (!dst || w < 1 || h < 1 || stride < (size_t)w * 4)
+		return;
+	need = (size_t)w * (size_t)h * 4;
+	if (tmp_bytes < need) {
+		uint8_t *n = realloc(tmp, need);
+		if (!n)
+			return;
+		tmp = n;
+		tmp_bytes = need;
+	}
+	read_pixels = (read_fn)mesa_proc("glReadPixels");
+	pixel_store = (store_fn)mesa_proc("glPixelStorei");
+	if (!read_pixels)
+		return;
+	if (pixel_store)
+		pixel_store(GL_PACK_ALIGNMENT, 4);
+	read_pixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, tmp);
+	for (y = 0; y < h; y++)
+		memcpy((uint8_t *)dst + (size_t)(h - 1 - y) * stride,
+			tmp + (size_t)y * (size_t)w * 4, (size_t)w * 4);
+	first = *(uint32_t *)dst;
+	if (copies < 4) {
+		copies++;
+		fprintf(stderr, "IOSurface pbuffer copy %p %dx%d first %08x\n",
+			s, w, h, first);
+	}
+}
+
+EGLSurface eglCreatePbufferFromClientBuffer(EGLDisplay dpy, EGLenum buftype,
+		void *buffer, EGLConfig config, const EGLint *attrib)
+{
+	EGLSurface (*fn)(EGLDisplay, EGLConfig, const EGLint *) = M("eglCreatePbufferSurface");
+	EGLint pb[8];
+	int w = 0, h = 0, i;
+	EGLSurface s;
+	typedef size_t (*sz_fn)(void *);
+
+	if (attrib) {
+		for (i = 0; attrib[i] != EGL_NONE && i < 64; i += 2) {
+			if (attrib[i] == EGL_WIDTH)
+				w = attrib[i + 1];
+			else if (attrib[i] == EGL_HEIGHT)
+				h = attrib[i + 1];
+		}
+	}
+	if ((w < 1 || h < 1) && buffer) {
+		sz_fn width = io_sym("IOSurfaceGetWidth");
+		sz_fn height = io_sym("IOSurfaceGetHeight");
+		if (width && height) {
+			w = (int)width(buffer);
+			h = (int)height(buffer);
+		}
+	}
+	fprintf(stderr, "eglCreatePbufferFromClientBuffer type=0x%x buffer=%p %dx%d\n",
+		buftype, buffer, w, h);
+	if (buftype != EGL_IOSURFACE_ANGLE || w < 1 || h < 1 || !fn)
+		return EGL_NO_SURFACE;
+	pb[0] = EGL_WIDTH;
+	pb[1] = w;
+	pb[2] = EGL_HEIGHT;
+	pb[3] = h;
+	pb[4] = EGL_NONE;
+	s = fn(dpy, config, pb);
+	fprintf(stderr, "eglCreatePbufferFromClientBuffer surface=%p eglError=0x%x\n",
+		s, mesa_error());
+	if (!s)
+		return EGL_NO_SURFACE;
+	for (i = 0; i < IOSURF_PB_MAX; i++) {
+		if (g_iosurf_pb[i].surface == NULL || g_iosurf_pb[i].surface == s) {
+			g_iosurf_pb[i].surface = s;
+			g_iosurf_pb[i].iosurface = buffer;
+			g_iosurf_pb[i].w = w;
+			g_iosurf_pb[i].h = h;
+			break;
+		}
+	}
+	return s;
+}
+
+static void shim_glFlush(void)
+{
+	typedef void (*fn_t)(void);
+	typedef EGLSurface (*cur_fn)(EGLint);
+	fn_t real = mesa_proc ? (fn_t)mesa_proc("glFlush") : NULL;
+	cur_fn current = M("eglGetCurrentSurface");
+	if (real)
+		real();
+	if (current)
+		copy_pb_to_iosurface(current(EGL_DRAW));
+}
+
+static void shim_glFinish(void)
+{
+	typedef void (*fn_t)(void);
+	typedef EGLSurface (*cur_fn)(EGLint);
+	fn_t real = mesa_proc ? (fn_t)mesa_proc("glFinish") : NULL;
+	cur_fn current = M("eglGetCurrentSurface");
+	if (real)
+		real();
+	if (current)
+		copy_pb_to_iosurface(current(EGL_DRAW));
+}
+
 EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig config, void *win, const EGLint *attrib)
 {
 	EGLSurface (*fn)(EGLDisplay, EGLConfig, void *, const EGLint *) = M("eglCreateWindowSurface");
@@ -1115,7 +1286,9 @@ EGLBoolean eglTerminate(EGLDisplay dpy)
 EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface s)
 {
 	EGLBoolean (*fn)(EGLDisplay, EGLSurface) = M("eglSwapBuffers");
-	return fn ? fn(dpy, s) : EGL_FALSE;
+	EGLBoolean ok = fn ? fn(dpy, s) : EGL_FALSE;
+	copy_pb_to_iosurface(s);
+	return ok;
 }
 
 EGLBoolean eglBindAPI(EGLenum api)
@@ -1511,6 +1684,10 @@ static void *shim_gl(const char *name)
 		return (void *)shim_glTexImage2D;
 	if (!strcmp(name, "glTexStorage2D"))
 		return (void *)shim_glTexStorage2D;
+	if (!strcmp(name, "glFlush"))
+		return (void *)shim_glFlush;
+	if (!strcmp(name, "glFinish"))
+		return (void *)shim_glFinish;
 	return NULL;
 }
 
@@ -1673,6 +1850,8 @@ void (*eglGetProcAddress(const char *name))(void)
 			return (void (*)(void))eglChooseConfig;
 		if (!strcmp(name, "eglCreatePbufferSurface"))
 			return (void (*)(void))eglCreatePbufferSurface;
+		if (!strcmp(name, "eglCreatePbufferFromClientBuffer"))
+			return (void (*)(void))eglCreatePbufferFromClientBuffer;
 		if (!strcmp(name, "eglQueryString"))
 			return (void (*)(void))eglQueryString;
 		if (!strcmp(name, "eglGetError"))

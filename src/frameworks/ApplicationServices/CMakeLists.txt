@@ -34,6 +34,12 @@ add_framework(ApplicationServices
 		CoreFoundation
 )
 
+if(TARGET ApplicationServices_obj)
+  target_sources(ApplicationServices_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET ApplicationServices)
+  target_sources(ApplicationServices PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()
+
 if (COMPONENT_gui)
 	set(CoreGraphics_BUILD ${CMAKE_BINARY_DIR}/src/external/cocotron/CoreGraphics/CoreGraphics)
 	set(CoreText_BUILD ${CMAKE_BINARY_DIR}/src/external/cocotron/CoreText/CoreText)

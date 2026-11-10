@@ -120,3 +120,9 @@ add_framework(Network
 )
 
 reexport(Network libnetwork ${CMAKE_BINARY_DIR}/src/external/libnetwork/libnetwork.dylib)
+
+if(TARGET Network_obj)
+  target_sources(Network_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET Network)
+  target_sources(Network PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

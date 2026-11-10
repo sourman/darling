@@ -6,6 +6,7 @@ set(DYLIB_CURRENT_VERSION "1.0.0")
 
 add_darling_library(sandbox_not_system SHARED
     src/sandbox.c
+    src/comet_stubs.c
 )
 set_target_properties(sandbox_not_system PROPERTIES OUTPUT_NAME sandbox.1)
 make_fat(sandbox_not_system)

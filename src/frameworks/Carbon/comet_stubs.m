@@ -30,3 +30,24 @@ CFArrayRef TISCreateInputSourceList(CFDictionaryRef properties, Boolean includeA
 }
 __attribute__((visibility("default"), used)) void TSMRemoveDocumentProperty(void) {}
 __attribute__((visibility("default"), used)) void TSMSetDocumentProperty(void) {}
+
+/* Comet dyld stubs. Symbols exist so the process can load. */
+const CFStringRef kTISPropertyInputSourceID = CFSTR("TISPropertyInputSourceID");
+const CFStringRef kTISPropertyInputSourceType = CFSTR("TISPropertyInputSourceType");
+const CFStringRef kTISPropertyUnicodeKeyLayoutData = CFSTR("TISPropertyUnicodeKeyLayoutData");
+const CFStringRef kTISTypeKeyboardLayout = CFSTR("TISTypeKeyboardLayout");
+__attribute__((visibility("default"), used)) long CallNextEventHandler(void) { return 0; }
+__attribute__((visibility("default"), used)) long GetCurrentKeyModifiers(void) { return 0; }
+__attribute__((visibility("default"), used)) long GetEventKind(void) { return 0; }
+__attribute__((visibility("default"), used)) long GetEventParameter(void) { return 0; }
+__attribute__((visibility("default"), used)) long InstallEventHandler(void) { return 0; }
+__attribute__((visibility("default"), used)) long LMGetKbdType(void) { return 0; }
+__attribute__((visibility("default"), used)) long ReceiveNextEvent(void) { return 0; }
+__attribute__((visibility("default"), used)) long RegisterEventHotKey(void) { return 0; }
+__attribute__((visibility("default"), used)) long ReleaseEvent(void) { return 0; }
+__attribute__((visibility("default"), used)) long RemoveEventHandler(void) { return 0; }
+TISInputSourceRef TISCopyCurrentASCIICapableKeyboardLayoutInputSource(void) { return NULL; }
+TISInputSourceRef TISCopyCurrentKeyboardLayoutInputSource(void) { return NULL; }
+TISInputSourceRef TISCopyCurrentKeyboardInputSource(void) { return NULL; }
+void *TISGetInputSourceProperty(TISInputSourceRef inputSourceRef, CFStringRef key) { (void)inputSourceRef; (void)key; return NULL; }
+__attribute__((visibility("default"), used)) long UnregisterEventHotKey(void) { return 0; }

@@ -92,26 +92,6 @@ static void _CGLInitialize(void)
     mkdir("/tmp/.X11-unix", 01777);
     symlink("/Volumes/SystemRoot/tmp/.X11-unix/X1", "/tmp/.X11-unix/X1");
     fprintf(stderr, "CGL framework loaded pid=%d\n", getpid());
-    /* Chromium reads GL_VERSION before it asks CGL for a context. A current
-     * Mesa ES context makes that string non-empty. */
-    if (ensure_software_display()) {
-        EGLint ctxattr[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
-        EGLint pbattribs[] = { EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE };
-        typedef const unsigned char *(*glgetstring_fn)(unsigned int);
-        EGLContext ctx = eglCreateContext(display, config, EGL_NO_CONTEXT, ctxattr);
-        EGLSurface surf = ctx ? eglCreatePbufferSurface(display, config, pbattribs) : EGL_NO_SURFACE;
-        void *gl;
-        glgetstring_fn glGetString;
-        if (ctx && surf && eglMakeCurrent(display, surf, surf, ctx)) {
-            glGetString = (glgetstring_fn)eglGetProcAddress("glGetString");
-            fprintf(stderr, "CGL startup GL_VERSION %s eglError=0x%x\n",
-                (glGetString && glGetString(0x1F02)) ? (const char *)glGetString(0x1F02) : "(null)",
-                eglGetError());
-        } else {
-            fprintf(stderr, "CGL startup context failed ctx=%p surf=%p eglError=0x%x\n",
-                (void *)ctx, (void *)surf, eglGetError());
-        }
-    }
 }
 
 static int ensure_software_display(void)

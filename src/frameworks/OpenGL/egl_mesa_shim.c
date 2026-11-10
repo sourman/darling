@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -34,12 +35,18 @@ typedef unsigned int EGLBoolean;
 
 static void *mesa;
 static void *(*mesa_proc)(const char *);
+static void ensure_external_context(void);
+
+static void patch_angle_gl_get_string(void);
 
 __attribute__((constructor))
 static void shim_loaded(void)
 {
 	setvbuf(stderr, NULL, _IONBF, 0);
 	fprintf(stderr, "mesa libEGL shim loaded\n");
+	/* glGetString runs on this thread as soon as the loader returns. */
+	ensure_external_context();
+	patch_angle_gl_get_string();
 }
 void (*eglGetProcAddress(const char *name))(void);
 
@@ -112,8 +119,15 @@ static EGLDisplay mesa_display(void)
 		return NULL;
 	d = gpd(EGL_PLATFORM_SURFACELESS_MESA, NULL, &none);
 	fprintf(stderr, "mesa surfaceless display=%p eglError=0x%x\n", d, mesa_error());
-	if (d)
+	if (d) {
+		EGLBoolean (*init)(EGLDisplay, EGLint *, EGLint *) = M("eglInitialize");
+		EGLint major = 0, minor = 0;
+		if (init && !init(d, &major, &minor))
+			fprintf(stderr, "mesa eglInitialize failed eglError=0x%x\n", mesa_error());
+		else
+			fprintf(stderr, "mesa eglInitialize %d.%d\n", major, minor);
 		return d;
+	}
 	x11 = dlopen("/usr/lib/native/libX11.dylib", RTLD_LAZY);
 	xopen = x11 ? dlsym(x11, "XOpenDisplay") : NULL;
 	xd = xopen ? xopen(NULL) : NULL;
@@ -295,10 +309,119 @@ EGLBoolean eglReleaseThread(void)
 	return fn ? fn() : EGL_TRUE;
 }
 
+static EGLDisplay external_dpy;
+static EGLSurface external_surf;
+static EGLContext external_ctx;
+
+static void ensure_external_context(void)
+{
+	EGLint cfgattr[] = {
+		0x3033, 0x0001, /* EGL_SURFACE_TYPE, EGL_PBUFFER_BIT */
+		0x3040, 0x0004, /* EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT */
+		0x3024, 8, 0x3023, 8, 0x3022, 8, /* RGB */
+		EGL_NONE
+	};
+	EGLConfig config;
+	EGLint got = 0;
+	const unsigned char *(*glver)(unsigned int);
+
+	if (external_ctx)
+		return;
+	external_dpy = mesa_display();
+	eglBindAPI(EGL_OPENGL_ES_API);
+	if (!eglChooseConfig(external_dpy, cfgattr, &config, 1, &got) || got < 1) {
+		fprintf(stderr, "external context: choose config failed eglError=0x%x\n", eglGetError());
+		return;
+	}
+	external_ctx = eglCreateContext(external_dpy, config, NULL,
+		(const EGLint[]){ 0x3098, 3, EGL_NONE }); /* EGL_CONTEXT_CLIENT_VERSION */
+	external_surf = eglCreatePbufferSurface(external_dpy, config,
+		(const EGLint[]){ 0x3057, 16, 0x3056, 16, EGL_NONE }); /* WIDTH, HEIGHT */
+	fprintf(stderr, "external context ctx=%p surf=%p\n", external_ctx, external_surf);
+	if (external_ctx && external_surf &&
+	    eglMakeCurrent(external_dpy, external_surf, external_surf, external_ctx)) {
+		glver = (void *)eglGetProcAddress("glGetString");
+		fprintf(stderr, "external GL_VERSION %s\n",
+			(glver && glver(GL_VERSION)) ? (const char *)glver(GL_VERSION) : "(null)");
+	}
+}
+
+/* ANGLE's glGetString reads its own TLS context, which stays null, so Chrome
+ * fatals on an empty VERSION. Point that export at Mesa's function. */
+static void patch_angle_gl_get_string(void)
+{
+	const char *path = "/Applications/Comet.app/Contents/Frameworks/Comet Framework.framework/Versions/145.2.7632.4581/Libraries/libGLESv2.dylib";
+	void *gles;
+	unsigned char *stub;
+	const unsigned char *(*fn)(unsigned int);
+	uintptr_t page;
+	unsigned char *imm;
+
+	gles = dlopen(path, 0x10 /* RTLD_NOLOAD */);
+	if (!gles)
+		gles = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+	if (!gles) {
+		fprintf(stderr, "angle libGLESv2 not loaded: %s\n", dlerror());
+		return;
+	}
+	stub = dlsym(gles, "glGetString");
+	fn = (void *)(mesa_proc ? mesa_proc("glGetString") : NULL);
+	if (!stub || !fn) {
+		fprintf(stderr, "angle glGetString patch missed stub=%p mesa=%p\n", stub, (void *)fn);
+		return;
+	}
+	page = (uintptr_t)stub & ~(uintptr_t)0xfff;
+	{
+		int (*mp)(void *, unsigned long, int) = dlsym((void *)-2, "mprotect");
+		if (!mp || mp((void *)page, 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+			fprintf(stderr, "angle glGetString mprotect failed mp=%p\n", (void *)mp);
+			return;
+		}
+	}
+	stub[0] = 0x48;
+	stub[1] = 0xb8; /* movabs rax, fn */
+	imm = stub + 2;
+	memcpy(imm, &fn, sizeof(fn));
+	stub[10] = 0xff;
+	stub[11] = 0xe0; /* jmp rax */
+	fprintf(stderr, "angle glGetString patched to %p\n", (void *)fn);
+}
+
+/* ANGLE looks this up and, while the proc is null, never sees the Mesa context.
+ * The header declares it void; Chromium uses the return as the external context. */
+EGLContext eglAcquireExternalContextANGLE(EGLDisplay dpy, EGLSurface drawAndRead)
+{
+	EGLSurface surf;
+	EGLContext current;
+
+	fprintf(stderr, "eglAcquireExternalContextANGLE dpy=%p surface=%p\n", dpy, drawAndRead);
+	ensure_external_context();
+	current = eglGetCurrentContext();
+	if (!current)
+		current = external_ctx;
+	surf = drawAndRead ? drawAndRead : external_surf;
+	if (current && surf)
+		eglMakeCurrent(external_dpy, surf, surf, current);
+	fprintf(stderr, "eglAcquireExternalContextANGLE -> %p\n", current);
+	return current;
+}
+
+void eglReleaseExternalContextANGLE(EGLDisplay dpy)
+{
+	fprintf(stderr, "eglReleaseExternalContextANGLE dpy=%p\n", dpy);
+	if (external_dpy)
+		eglMakeCurrent(external_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+}
+
 void (*eglGetProcAddress(const char *name))(void)
 {
+	static int primed;
 	fprintf(stderr, "eglGetProcAddress %s\n", name ? name : "(null)");
 	load_mesa();
+	if (!primed) {
+		primed = 1;
+		ensure_external_context();
+	}
 	if (name) {
 		if (!strcmp(name, "eglGetPlatformDisplay"))
 			return (void (*)(void))eglGetPlatformDisplay;
@@ -324,6 +447,10 @@ void (*eglGetProcAddress(const char *name))(void)
 			return (void (*)(void))eglBindAPI;
 		if (!strcmp(name, "eglGetProcAddress"))
 			return (void (*)(void))eglGetProcAddress;
+		if (!strcmp(name, "eglAcquireExternalContextANGLE"))
+			return (void (*)(void))eglAcquireExternalContextANGLE;
+		if (!strcmp(name, "eglReleaseExternalContextANGLE"))
+			return (void (*)(void))eglReleaseExternalContextANGLE;
 	}
 	if (!mesa_proc)
 		return NULL;

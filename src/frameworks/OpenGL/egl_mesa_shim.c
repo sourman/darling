@@ -50,6 +50,9 @@ static void log_texturable_flags(void);
 
 static void patch_angle_gl_get_string(void);
 static void hook_glvnd_create_context(void);
+static void hook_mesa_iosurface_pbuffer(void);
+EGLSurface eglCreatePbufferFromClientBuffer(EGLDisplay dpy, EGLenum buftype,
+		void *buffer, EGLConfig config, const EGLint *attrib);
 static void log_clear_branch(void);
 static void log_rect_zero(void);
 static void log_rect_store(void);
@@ -83,6 +86,7 @@ static void shim_loaded(void)
 	ensure_external_context();
 	patch_angle_gl_get_string();
 	hook_glvnd_create_context();
+	hook_mesa_iosurface_pbuffer();
 	shim_ready = 1;
 	if (proc_is_gpu()) {
 		log_rect_store();
@@ -1047,6 +1051,55 @@ static void hook_glvnd_create_context(void)
 	fn[10] = 0xff;
 	fn[11] = 0xe0;
 	fprintf(stderr, "glvnd eglCreateContext hooked at %p\n", fn);
+}
+
+/* Chromium resolves eglCreatePbufferFromClientBuffer from Mesa, which
+ * returns EGL_BAD_ALLOC for an IOSurface. Point that export at our pbuffer. */
+static void hook_mesa_iosurface_pbuffer(void)
+{
+	unsigned char *fn;
+	void *mesa_egl;
+	void *sym;
+
+	load_mesa();
+	mesa_egl = dlopen("/usr/lib/native/libEGL.dylib", RTLD_NOLOAD);
+	sym = mesa_egl ? dlsym(mesa_egl, "eglCreatePbufferFromClientBuffer") : NULL;
+	if (!sym || sym == (void *)eglCreatePbufferFromClientBuffer) {
+		fprintf(stderr, "mesa pbuffer hook missing sym=%p\n", sym);
+		return;
+	}
+	fn = sym;
+	if (prot_page((void *)((uintptr_t)fn & ~(uintptr_t)0xfff)) != 0) {
+		fprintf(stderr, "mesa pbuffer mprotect failed %p\n", fn);
+		return;
+	}
+	/*
+	 * Chromium tail-calls this export, so RSP is 16-byte aligned on
+	 * entry. A bare jmp into the C function makes every call it makes
+	 * land in dyld_stub_binder's stack_not_16_byte_aligned_error.
+	 * Align, call, and return.
+	 *
+	 *   push rbp; mov rbp, rsp; and rsp, -16
+	 *   movabs rax, hook; call rax
+	 *   mov rsp, rbp; pop rbp; ret
+	 */
+	{
+		void *hook = (void *)eglCreatePbufferFromClientBuffer;
+		unsigned char tramp[] = {
+			0x55,
+			0x48, 0x89, 0xe5,
+			0x48, 0x83, 0xe4, 0xf0,
+			0x48, 0xb8,
+			0, 0, 0, 0, 0, 0, 0, 0,
+			0xff, 0xd0,
+			0x48, 0x89, 0xec,
+			0x5d,
+			0xc3
+		};
+		memcpy(tramp + 10, &hook, sizeof hook);
+		memcpy(fn, tramp, sizeof tramp);
+	}
+	fprintf(stderr, "mesa eglCreatePbufferFromClientBuffer hooked at %p\n", fn);
 }
 
 EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share, const EGLint *attrib)

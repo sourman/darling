@@ -3,6 +3,7 @@
  * device here. Log the request, then hand back the Mesa vendor that is
  * already installed (surfaceless, or X11 on DISPLAY). */
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -263,22 +264,35 @@ static int prot_page(void *page)
 
 static void hook_glvnd_create_context(void)
 {
-	FILE *maps;
 	char line[512];
 	unsigned long start = 0, off = 0;
 	unsigned char *fn;
 	int32_t disp;
+	int fd, n, used = 0;
 
-	maps = fopen("/proc/self/maps", "r");
-	if (!maps)
+	/* fopen is remapped to fopen$UNIX2003, which this flat namespace
+	 * does not provide. Read the map with open. */
+	fd = open("/proc/self/maps", 0);
+	if (fd < 0)
 		return;
-	while (fgets(line, sizeof line, maps)) {
-		if (!strstr(line, "libEGL.so.1") || !strstr(line, "r-xp"))
-			continue;
-		sscanf(line, "%lx-%*x %*s %lx", &start, &off);
-		break;
+	while ((n = read(fd, line + used, sizeof line - 1 - used)) > 0) {
+		char *nl;
+		used += n;
+		line[used] = 0;
+		while ((nl = strchr(line, '\n'))) {
+			*nl = 0;
+			if (strstr(line, "libEGL.so.1") && strstr(line, "r-xp"))
+				sscanf(line, "%lx-%*x %*s %lx", &start, &off);
+			used = (int)strlen(nl + 1);
+			memmove(line, nl + 1, used);
+			line[used] = 0;
+			if (start)
+				break;
+		}
+		if (start || used >= (int)sizeof line - 1)
+			break;
 	}
-	fclose(maps);
+	close(fd);
 	if (!start) {
 		fprintf(stderr, "glvnd eglCreateContext not mapped\n");
 		return;

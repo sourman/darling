@@ -475,45 +475,51 @@ static void ensure_external_context(void)
 	}
 }
 
-/* ANGLE's glGetString reads its own TLS context, which stays null, so Chrome
- * fatals on an empty VERSION. Point that export at Mesa's function. */
+/* ANGLE's gl* stubs read an empty TLS context, so glGetIntegerv returns 0
+ * and shared GL init rejects the context. Point each exported stub at Mesa. */
+static const char *const k_gl_names[] = {
+#include "egl_mesa_gl_names.inc"
+};
+
 static void patch_angle_gl_get_string(void)
 {
 	const char *path = "/Applications/Comet.app/Contents/Frameworks/Comet Framework.framework/Versions/145.2.7632.4581/Libraries/libGLESv2.dylib";
 	void *gles;
-	unsigned char *stub;
-	const unsigned char *(*fn)(unsigned int);
-	uintptr_t page;
-	unsigned char *imm;
+	int (*mp)(void *, unsigned long, int);
+	uintptr_t last_page = 0;
+	unsigned i;
+	int patched = 0;
 
 	gles = dlopen(path, 0x10 /* RTLD_NOLOAD */);
 	if (!gles)
 		gles = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-	if (!gles) {
+	if (!gles || !mesa_proc) {
 		fprintf(stderr, "angle libGLESv2 not loaded: %s\n", dlerror());
 		return;
 	}
-	stub = dlsym(gles, "glGetString");
-	fn = (void *)(mesa_proc ? mesa_proc("glGetString") : NULL);
-	if (!stub || !fn) {
-		fprintf(stderr, "angle glGetString patch missed stub=%p mesa=%p\n", stub, (void *)fn);
-		return;
-	}
-	page = (uintptr_t)stub & ~(uintptr_t)0xfff;
-	{
-		int (*mp)(void *, unsigned long, int) = dlsym((void *)-2, "mprotect");
-		if (!mp || mp((void *)page, 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
-			fprintf(stderr, "angle glGetString mprotect failed mp=%p\n", (void *)mp);
-			return;
+	mp = dlsym((void *)-2, "mprotect");
+	for (i = 0; i < sizeof k_gl_names / sizeof k_gl_names[0]; i++) {
+		unsigned char *stub = dlsym(gles, k_gl_names[i]);
+		void *fn = mesa_proc(k_gl_names[i]);
+		uintptr_t page;
+		if (!stub || !fn || stub[0] != 0x55)
+			continue;
+		page = (uintptr_t)stub & ~(uintptr_t)0xfff;
+		if (page != last_page) {
+			if (!mp || mp((void *)page, 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+				fprintf(stderr, "angle gl mprotect failed %s\n", k_gl_names[i]);
+				return;
+			}
+			last_page = page;
 		}
+		stub[0] = 0x48;
+		stub[1] = 0xb8;
+		memcpy(stub + 2, &fn, sizeof fn);
+		stub[10] = 0xff;
+		stub[11] = 0xe0;
+		patched++;
 	}
-	stub[0] = 0x48;
-	stub[1] = 0xb8; /* movabs rax, fn */
-	imm = stub + 2;
-	memcpy(imm, &fn, sizeof(fn));
-	stub[10] = 0xff;
-	stub[11] = 0xe0; /* jmp rax */
-	fprintf(stderr, "angle glGetString patched to %p\n", (void *)fn);
+	fprintf(stderr, "angle gl stubs patched %d including glGetIntegerv\n", patched);
 }
 
 /* ANGLE looks this up and, while the proc is null, never sees the Mesa context.

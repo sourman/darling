@@ -1125,6 +1125,21 @@ pid_t getInitProcess()
 		return 0;
 	}
 
+	/*
+	 * A zombie still answers kill(pid, 0), but its mount namespace is gone.
+	 * Joining that pid fails with "Cannot open mnt namespace file".
+	 */
+	snprintf(procBuf, sizeof(procBuf), "/proc/%d/ns/mnt", pid);
+	{
+		int ns = open(procBuf, O_RDONLY);
+		if (ns < 0)
+		{
+			unlink(pidPath);
+			return 0;
+		}
+		close(ns);
+	}
+
 	// Is it actually an init process?
 	snprintf(procBuf, sizeof(procBuf), "/proc/%d/comm", pid);
 	fp = fopen(procBuf, "r");

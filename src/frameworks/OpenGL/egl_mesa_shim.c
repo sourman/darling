@@ -475,6 +475,108 @@ static void ensure_external_context(void)
 	}
 }
 
+/* Mesa's ES internalformat query rejects GL_BGRA8_EXT (0x93A1). Skia then
+ * records no sample counts for that format, and the output-surface
+ * characterization stays zero at the color-type word. Report BGRA8 as
+ * color-renderable with one sample, and allocate it as RGBA8. */
+static int bgra8(unsigned fmt)
+{
+	return fmt == 0x93A1;
+}
+
+void shim_glGetInternalformativ(unsigned target, unsigned fmt, unsigned pname,
+		int count, int *params)
+{
+	typedef void (*fn_t)(unsigned, unsigned, unsigned, int, int *);
+	static fn_t real;
+	if (!real && mesa_proc)
+		real = (fn_t)mesa_proc("glGetInternalformativ");
+	if (bgra8(fmt)) {
+		if ((pname == 0x826F || pname == 0x8286 || pname == 0x8289) &&
+		    params && count > 0) {
+			params[0] = 1;
+			return;
+		}
+		if (pname == 0x9380 && params && count > 0) {
+			params[0] = 1;
+			return;
+		}
+		if (pname == 0x80A9 && params && count > 0) {
+			params[0] = 1;
+			return;
+		}
+		fmt = 0x8058;
+	}
+	if (real)
+		real(target, fmt, pname, count, params);
+}
+
+void shim_glRenderbufferStorage(unsigned target, unsigned fmt, int w, int h)
+{
+	typedef void (*fn_t)(unsigned, unsigned, int, int);
+	static fn_t real;
+	if (!real && mesa_proc)
+		real = (fn_t)mesa_proc("glRenderbufferStorage");
+	if (bgra8(fmt))
+		fmt = 0x8058;
+	if (real)
+		real(target, fmt, w, h);
+}
+
+void shim_glRenderbufferStorageMultisample(unsigned target, int samples,
+		unsigned fmt, int w, int h)
+{
+	typedef void (*fn_t)(unsigned, int, unsigned, int, int);
+	static fn_t real;
+	if (!real && mesa_proc)
+		real = (fn_t)mesa_proc("glRenderbufferStorageMultisample");
+	if (bgra8(fmt))
+		fmt = 0x8058;
+	if (real)
+		real(target, samples, fmt, w, h);
+}
+
+void shim_glTexImage2D(unsigned target, int level, int internal,
+		int w, int h, int border, unsigned format, unsigned type,
+		const void *pixels)
+{
+	typedef void (*fn_t)(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
+	static fn_t real;
+	if (!real && mesa_proc)
+		real = (fn_t)mesa_proc("glTexImage2D");
+	if (bgra8((unsigned)internal))
+		internal = 0x8058;
+	if (real)
+		real(target, level, internal, w, h, border, format, type, pixels);
+}
+
+void shim_glTexStorage2D(unsigned target, int levels, unsigned fmt, int w, int h)
+{
+	typedef void (*fn_t)(unsigned, int, unsigned, int, int);
+	static fn_t real;
+	if (!real && mesa_proc)
+		real = (fn_t)mesa_proc("glTexStorage2D");
+	if (bgra8(fmt))
+		fmt = 0x8058;
+	if (real)
+		real(target, levels, fmt, w, h);
+}
+
+static void *shim_gl(const char *name)
+{
+	if (!strcmp(name, "glGetInternalformativ"))
+		return (void *)shim_glGetInternalformativ;
+	if (!strcmp(name, "glRenderbufferStorage"))
+		return (void *)shim_glRenderbufferStorage;
+	if (!strcmp(name, "glRenderbufferStorageMultisample"))
+		return (void *)shim_glRenderbufferStorageMultisample;
+	if (!strcmp(name, "glTexImage2D"))
+		return (void *)shim_glTexImage2D;
+	if (!strcmp(name, "glTexStorage2D"))
+		return (void *)shim_glTexStorage2D;
+	return NULL;
+}
+
 /* ANGLE's gl* stubs read an empty TLS context, so glGetIntegerv returns 0
  * and shared GL init rejects the context. Point each exported stub at Mesa. */
 static const char *const k_gl_names[] = {
@@ -500,7 +602,9 @@ static void patch_angle_gl_get_string(void)
 	mp = dlsym((void *)-2, "mprotect");
 	for (i = 0; i < sizeof k_gl_names / sizeof k_gl_names[0]; i++) {
 		unsigned char *stub = dlsym(gles, k_gl_names[i]);
-		void *fn = mesa_proc(k_gl_names[i]);
+		void *fn = shim_gl(k_gl_names[i]);
+		if (!fn)
+			fn = mesa_proc(k_gl_names[i]);
 		uintptr_t page;
 		if (!stub || !fn || stub[0] != 0x55)
 			continue;
@@ -586,6 +690,8 @@ void (*eglGetProcAddress(const char *name))(void)
 			return (void (*)(void))eglAcquireExternalContextANGLE;
 		if (!strcmp(name, "eglReleaseExternalContextANGLE"))
 			return (void (*)(void))eglReleaseExternalContextANGLE;
+		if (shim_gl(name))
+			return (void (*)(void))shim_gl(name);
 	}
 	if (!mesa_proc)
 		return NULL;

@@ -185,17 +185,49 @@ EGLBoolean eglChooseConfig(EGLDisplay dpy, const EGLint *attrib, EGLConfig *conf
 	return fn ? fn(dpy, attrib, configs, n, got) : EGL_FALSE;
 }
 
+/* Mesa rejects ANGLE-only context tokens with EGL_BAD_ATTRIBUTE. Keep the
+ * version and the few core flags Mesa implements. */
+static const EGLint *mesa_context_attribs(const EGLint *attrib, EGLint *buf, int cap)
+{
+	int n = 0;
+	int i;
+	if (!attrib)
+		return NULL;
+	fprintf(stderr, "eglCreateContext attribs");
+	for (i = 0; attrib[i] != EGL_NONE && i < 48; i += 2)
+		fprintf(stderr, " 0x%x=0x%x", attrib[i], attrib[i + 1]);
+	fprintf(stderr, "\n");
+	for (i = 0; attrib[i] != EGL_NONE && i < 48 && n + 2 < cap; i += 2) {
+		EGLint k = attrib[i];
+		if (k == 0x3098 || k == 0x30FB || k == 0x30FC || k == 0x30FD ||
+		    k == 0x31B0 || k == 0x31B1 || k == 0x31B2 || k == 0x31B3 || k == 0x31BD) {
+			buf[n++] = k;
+			buf[n++] = attrib[i + 1];
+		}
+	}
+	buf[n] = EGL_NONE;
+	return buf;
+}
+
 EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share, const EGLint *attrib)
 {
 	EGLContext (*fn)(EGLDisplay, EGLConfig, EGLContext, const EGLint *) = M("eglCreateContext");
 	EGLint es2[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+	EGLint filtered[32];
 	EGLContext ctx;
 	EGLBoolean (*bind)(EGLenum) = M("eglBindAPI");
+	const EGLint *use = attrib;
 	if (bind)
 		bind(EGL_OPENGL_ES_API);
-	if (!attrib)
-		attrib = es2;
-	ctx = fn ? fn(dpy, config, share, attrib) : NULL;
+	if (attrib)
+		use = mesa_context_attribs(attrib, filtered, 32);
+	if (!use)
+		use = es2;
+	ctx = fn ? fn(dpy, config, share, use) : NULL;
+	if (!ctx && attrib) {
+		ctx = fn ? fn(dpy, config, share, es2) : NULL;
+		fprintf(stderr, "eglCreateContext retry ES2 ctx=%p eglError=0x%x\n", ctx, mesa_error());
+	}
 	fprintf(stderr, "eglCreateContext dpy=%p ctx=%p eglError=0x%x\n", dpy, ctx, mesa_error());
 	return ctx;
 }

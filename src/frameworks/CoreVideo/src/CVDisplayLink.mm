@@ -11,11 +11,14 @@
 #import <Foundation/NSDictionary.h>
 #include <CoreGraphics/CGWindow.h>
 #include <CoreGraphics/CGDirectDisplay.h>
+#include <CoreFoundation/CFRunLoop.h>
 
 static const NSString* kDirectDisplayArray = @"CGDirectDisplay";
 static NSString* const kOutputCallback = @"CVDisplayLinkOutputCallback";
 static NSString* const kOutputUserInfo = @"CVDisplayLinkOutputUserInfo";
 static NSString* const kRunning = @"CVDisplayLinkRunning";
+static NSString* const kStarterRunLoop = @"CVDisplayLinkStarterRunLoop";
+static NSString* const kStarterSource = @"CVDisplayLinkStarterSource";
 
 static void fillTimeStamp(CVTimeStamp* ts)
 {
@@ -103,13 +106,43 @@ static void fireDisplayLink(NSMutableDictionary* self)
 		fflush(stderr);
 	}
 	callback((CVDisplayLinkRef) self, &now, &output, 0, &flagsOut, userInfo);
+	static int ran_logs;
+	if (ran_logs < 8 && userInfo != NULL) {
+		ran_logs++;
+		uintptr_t task_runner = *(uintptr_t *)((char *)userInfo + 0x48);
+		uintptr_t sequence = 0;
+		uintptr_t queue = 0;
+		uintptr_t bound = 0;
+		if (task_runner > 0x1000)
+			sequence = *(uintptr_t *)(task_runner + 0x10);
+		if (sequence > 0x1000)
+			queue = *(uintptr_t *)(sequence + 0x38);
+		if (queue > 0x1000) {
+			uintptr_t assoc = *(uintptr_t *)(queue + 0x18);
+			if (assoc > 0x1000)
+				bound = *(uintptr_t *)(assoc + 0x8);
+		}
+		fprintf(stderr, "CVDisplayLink ran self=%lx bound=%lx\n",
+			(unsigned long)pthread_self(), (unsigned long)bound);
+		fflush(stderr);
+	}
+}
+
+static void displayLinkPerform(void *info)
+{
+	fireDisplayLink((NSMutableDictionary *)info);
 }
 
 static void* displayLinkThread(void* arg)
 {
 	NSMutableDictionary* self = (NSMutableDictionary*) arg;
+	CFRunLoopRef rl = (CFRunLoopRef)[[self objectForKey: kStarterRunLoop] unsignedLongValue];
+	CFRunLoopSourceRef source = (CFRunLoopSourceRef)[[self objectForKey: kStarterSource] unsignedLongValue];
 	while ([[self objectForKey: kRunning] boolValue]) {
-		fireDisplayLink(self);
+		if (source != NULL && rl != NULL) {
+			CFRunLoopSourceSignal(source);
+			CFRunLoopWakeUp(rl);
+		}
 		usleep(16667);
 	}
 	[self release];
@@ -155,6 +188,18 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
 	if ([[self objectForKey: kRunning] boolValue])
 		return kCVReturnSuccess;
 	[self setObject: @YES forKey: kRunning];
+	CFRunLoopRef rl = CFRunLoopGetCurrent();
+	CFRetain(rl);
+	CFRunLoopSourceContext ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.info = self;
+	ctx.perform = displayLinkPerform;
+	CFRunLoopSourceRef source = CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &ctx);
+	CFRunLoopAddSource(rl, source, kCFRunLoopCommonModes);
+	[self setObject: [NSNumber numberWithUnsignedLong: (unsigned long)rl]
+			forKey: kStarterRunLoop];
+	[self setObject: [NSNumber numberWithUnsignedLong: (unsigned long)source]
+			forKey: kStarterSource];
 	[self retain];
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, displayLinkThread, self) != 0) {

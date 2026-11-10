@@ -122,8 +122,22 @@ static void fireDisplayLink(NSMutableDictionary* self)
 			if (assoc > 0x1000)
 				bound = *(uintptr_t *)(assoc + 0x8);
 		}
-		fprintf(stderr, "CVDisplayLink ran self=%lx bound=%lx\n",
-			(unsigned long)pthread_self(), (unsigned long)bound);
+		uintptr_t head = 0;
+		uintptr_t tail = 0;
+		if (queue > 0x1000) {
+			head = *(uintptr_t *)(queue + 0x88);
+			tail = *(uintptr_t *)(queue + 0x90);
+		}
+		/*
+		 * The display-link callback posts OnDisplayLinkCallback onto this
+		 * queue. head is the RunWork cursor at +0x88 and tail is the
+		 * producer cursor at +0x90. A tail that moves and a head that
+		 * later catches it means that callback ran.
+		 */
+		fprintf(stderr, "CVDisplayLink ran self=%lx bound=%lx queue=%lx head=%lu tail=%lu\n",
+			(unsigned long)pthread_self(), (unsigned long)bound,
+			(unsigned long)queue,
+			(unsigned long)head, (unsigned long)tail);
 		fflush(stderr);
 	}
 }

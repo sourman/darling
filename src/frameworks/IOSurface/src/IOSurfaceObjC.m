@@ -38,6 +38,7 @@ typedef struct
 	int shmfd;
 	size_t mapLength;
 	void* mapBase;
+	CFMutableDictionaryRef attachments;
 } ImplData;
 
 /* Shared with every process in the prefix. The mach port handed out by
@@ -529,6 +530,27 @@ static IOSurface* surface_from_shm(uint32_t surfaceID)
 		.options = options,
 	};
 	return IOConnectCallMethod(g_surfaceService, kIOSurfaceMethodUnlock, NULL, 0, &args, sizeof(args), NULL, 0, NULL, 0);
+}
+
+- (void)setAttachment:(id)value forKey:(id)key
+{
+	ImplData* data = (ImplData*) _impl;
+	if (key == nil)
+		return;
+	if (data->attachments == NULL)
+		data->attachments = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	if (value == nil)
+		CFDictionaryRemoveValue(data->attachments, key);
+	else
+		CFDictionarySetValue(data->attachments, key, value);
+}
+
+- (id)attachmentForKey:(id)key
+{
+	ImplData* data = (ImplData*) _impl;
+	if (data->attachments == NULL || key == nil)
+		return nil;
+	return (id)CFDictionaryGetValue(data->attachments, key);
 }
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {

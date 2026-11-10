@@ -1688,7 +1688,12 @@ void (*eglGetProcAddress(const char *name))(void)
 		if (shim_gl(name))
 			return (void (*)(void))shim_gl(name);
 	}
-	if (!mesa_proc)
+	/*
+	 * Mesa's eglGetProcAddress strstr()s the name. A NULL name is the
+	 * needle that killed VizCompositorThread in ld-linux. EGL returns
+	 * NULL for a NULL name.
+	 */
+	if (!name || !mesa_proc)
 		return NULL;
 	return (void (*)(void))mesa_proc(name);
 }

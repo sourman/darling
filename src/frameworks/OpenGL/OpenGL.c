@@ -384,7 +384,9 @@ CGLError CGLUnlockContext(CGLContextObj context) {
 }
 
 CGLError CGLFlushDrawable(CGLContextObj context) {
-    eglSwapBuffers(display,context->egl_surface);
+    if (context == NULL || context->egl_surface == NULL)
+        return kCGLBadContext;
+    eglSwapBuffers(display, context->egl_surface);
     return kCGLNoError;
 }
 

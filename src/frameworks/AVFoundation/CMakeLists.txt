@@ -527,3 +527,10 @@ add_framework(AVFoundation
         objc
         Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET AVFoundation_obj)
+  target_sources(AVFoundation_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET AVFoundation)
+  target_sources(AVFoundation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

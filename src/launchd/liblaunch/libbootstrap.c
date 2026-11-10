@@ -136,7 +136,18 @@ bootstrap_check_in(mach_port_t bp, const name_t service_name, mach_port_t *sp)
 {
 	uuid_t junk;
 	(void)bzero(junk, sizeof(junk));
-	return vproc_mig_check_in2(bp, (char *)service_name, sp, junk, 0);
+	kern_return_t kr = vproc_mig_check_in2(bp, (char *)service_name, sp, junk, 0);
+
+	if (kr == VPROC_ERR_TRY_PER_USER) {
+		mach_port_t puc;
+
+		if (vproc_mig_lookup_per_user_context(bp, 0, &puc) == 0) {
+			kr = vproc_mig_check_in2(puc, (char *)service_name, sp, junk, 0);
+			mach_port_deallocate(mach_task_self(), puc);
+		}
+	}
+
+	return kr;
 }
 
 kern_return_t

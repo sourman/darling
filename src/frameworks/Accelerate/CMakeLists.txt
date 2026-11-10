@@ -27,3 +27,10 @@ add_framework(Accelerate
 )
 
 reexport(Accelerate vecLib ${CMAKE_CURRENT_BINARY_DIR}/vecLib/vecLib)
+
+# Comet dyld compatibility stubs
+if(TARGET Accelerate_obj)
+  target_sources(Accelerate_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET Accelerate)
+  target_sources(Accelerate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

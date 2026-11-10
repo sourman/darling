@@ -44,3 +44,9 @@ add_framework(OpenDirectory
 )
 
 reexport(OpenDirectory CFOpenDirectory ${CMAKE_BINARY_DIR}/src/frameworks/OpenDirectory/CFOpenDirectory/CFOpenDirectory)
+
+if(TARGET OpenDirectory_obj)
+  target_sources(OpenDirectory_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET OpenDirectory)
+  target_sources(OpenDirectory PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

@@ -8897,6 +8897,16 @@ job_mig_check_in2(job_t j, name_t servicename, mach_port_t *serviceportp, uuid_t
 		return BOOTSTRAP_NO_MEMORY;
 	}
 
+#if !TARGET_OS_EMBEDDED
+	/* Same redirect as look_up2. Otherwise a user process checks the
+	 * service in on pid 1 and its children look it up in the per-user
+	 * domain, which returns BOOTSTRAP_UNKNOWN_SERVICE.
+	 */
+	if (unlikely(pid1_magic && j->anonymous && j->mgr->parentmgr == NULL && ldc->uid != 0 && ldc->euid != 0)) {
+		return VPROC_ERR_TRY_PER_USER;
+	}
+#endif
+
 	if (j->dedicated_instance) {
 		struct machservice *msi = NULL;
 		SLIST_FOREACH(msi, &j->machservices, sle) {

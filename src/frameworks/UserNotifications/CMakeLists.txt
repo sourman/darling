@@ -66,3 +66,10 @@ add_framework(UserNotifications
 		objc
 		Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET UserNotifications_obj)
+  target_sources(UserNotifications_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET UserNotifications)
+  target_sources(UserNotifications PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

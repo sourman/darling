@@ -9,7 +9,7 @@ set(DYLIB_INSTALL_NAME "/usr/lib/libpmenergy.dylib")
 set(DYLIB_COMPAT_VERSION "1.0.0")
 set(DYLIB_CURRENT_VERSION "1.0.0")
 
-add_darling_library(pmenergy SHARED src/pmenergy.c)
+add_darling_library(pmenergy SHARED src/pmenergy.c src/comet_stubs.c)
 target_link_libraries(pmenergy PRIVATE system)
 
 ###

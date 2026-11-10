@@ -18,8 +18,37 @@
 */
 
 #import <OpenDirectory/ODNode.h>
+#import <OpenDirectory/ODRecord.h>
 
 @implementation ODNode
+
++ (instancetype)nodeWithSession:(ODSession *)inSession type:(ODNodeType)inType error:(NSError **)outError
+{
+    (void)inSession;
+    (void)inType;
+    if (outError != NULL)
+        *outError = nil;
+    return [[[self alloc] init] autorelease];
+}
+
++ (instancetype)nodeWithSession:(ODSession *)inSession name:(NSString *)inName error:(NSError **)outError
+{
+    (void)inSession;
+    (void)inName;
+    if (outError != NULL)
+        *outError = nil;
+    return [[[self alloc] init] autorelease];
+}
+
+- (ODRecord *)recordWithRecordType:(ODRecordType)inRecordType name:(NSString *)inRecordName attributes:(id)inAttributes error:(NSError **)outError
+{
+    (void)inRecordType;
+    (void)inRecordName;
+    (void)inAttributes;
+    if (outError != NULL)
+        *outError = nil;
+    return [[[ODRecord alloc] init] autorelease];
+}
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {

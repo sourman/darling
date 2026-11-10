@@ -202,7 +202,8 @@ CGLError CGLSetCurrentContext(CGLContextObj context) {
     pthread_key_t key = get_current_context_key();
     pthread_setspecific(key, context);
 
-    if (context != NULL) {
+    if (context != NULL && context->egl_context != EGL_NO_CONTEXT &&
+        context->egl_surface != NULL) {
         EGLSurface surface = context->egl_surface;
         eglMakeCurrent(display, surface, surface, context->egl_context);
     } else {
@@ -312,7 +313,9 @@ CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CG
     EGLContext egl_context = eglCreateContext(display, config, egl_share, NULL);
 
     if (egl_context == EGL_NO_CONTEXT) {
-        return kCGLBadContext;
+        /* No EGL display in this prefix. Callers still flush the pointer
+         * CGLCreateContext writes, so hand back a context with no surface. */
+        fprintf(stderr, "CGLCreateContext: software context, eglCreateContext failed\n");
     }
 
     CGLContextObj context = malloc(sizeof(struct _CGLContextObj));
@@ -384,7 +387,9 @@ CGLError CGLUnlockContext(CGLContextObj context) {
 }
 
 CGLError CGLFlushDrawable(CGLContextObj context) {
-    eglSwapBuffers(display,context->egl_surface);
+    if (context == NULL || context->egl_surface == NULL)
+        return kCGLBadContext;
+    eglSwapBuffers(display, context->egl_surface);
     return kCGLNoError;
 }
 

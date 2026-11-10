@@ -23,3 +23,10 @@ add_framework(MediaAccessibility
     DEPENDENCIES
         system
 )
+
+# Comet dyld compatibility stubs
+if(TARGET MediaAccessibility_obj)
+  target_sources(MediaAccessibility_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET MediaAccessibility)
+  target_sources(MediaAccessibility PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

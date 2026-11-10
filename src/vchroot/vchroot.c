@@ -6,6 +6,7 @@
 
 extern int lkm_call(int nr, ...);
 extern int __darling_vchroot(int dfd);
+extern void __darling_vchroot_force_root(void);
 
 int main(int argc, const char** argv)
 {
@@ -42,6 +43,11 @@ int main(int argc, const char** argv)
 		perror("vchroot");
 		return 3;
 	}
+
+	/* Already chrooted into the prefix: argv[2] exists at the chroot path.
+	   The fd readlink is the host prefix and must not be prepended again. */
+	if (access(argv[2], F_OK) == 0)
+		__darling_vchroot_force_root();
 
 	close(dfd);
 

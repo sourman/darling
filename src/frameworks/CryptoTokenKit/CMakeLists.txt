@@ -34,4 +34,12 @@ add_framework(CryptoTokenKit
 	DEPENDENCIES
 		system
 		CoreFoundation
+		Foundation
 )
+
+# Comet dyld compatibility stubs
+if(TARGET CryptoTokenKit_obj)
+  target_sources(CryptoTokenKit_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET CryptoTokenKit)
+  target_sources(CryptoTokenKit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

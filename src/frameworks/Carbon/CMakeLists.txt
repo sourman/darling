@@ -73,3 +73,10 @@ reexport(Carbon SpeechRecognition ${SpeechRecognition_BUILD})
 set(ApplicationServices_BUILD ${CMAKE_CURRENT_BINARY_DIR}/../ApplicationServices/ApplicationServices)
 
 reexport(Carbon ApplicationServices ${ApplicationServices_BUILD})
+
+# Comet dyld compatibility stubs
+if(TARGET Carbon_obj)
+  target_sources(Carbon_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+elseif(TARGET Carbon)
+  target_sources(Carbon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/comet_stubs.m)
+endif()

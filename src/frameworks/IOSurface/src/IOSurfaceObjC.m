@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdio.h>
 
 static io_service_t g_surfaceService;
 
@@ -49,7 +50,7 @@ static uint32_t darling_surface_id(void)
 
 	if (counter == NULL)
 	{
-		fd = shm_open("/darling-iosurface-seq", O_CREAT | O_RDWR, 0666);
+		fd = open("/tmp/darling-iosurface-seq", O_CREAT | O_RDWR, 0666);
 		if (fd < 0)
 			return 0;
 		if (ftruncate(fd, sizeof(uint32_t)) != 0)
@@ -100,8 +101,8 @@ static IOSurface* surface_from_shm(uint32_t surfaceID)
 	IOSurface* surface;
 	ImplData* impl;
 
-	snprintf(name, sizeof(name), "/darling-iosurf-%u", surfaceID);
-	fd = shm_open(name, O_RDWR, 0666);
+	snprintf(name, sizeof(name), "/tmp/darling-iosurf-%u", surfaceID);
+	fd = open(name, O_RDWR, 0666);
 	if (fd < 0)
 		return nil;
 
@@ -222,6 +223,9 @@ static IOSurface* surface_from_shm(uint32_t surfaceID)
 		allocSize = bytesPerRow * height;
 	if (width == 0 || height == 0 || bytesPerRow == 0 || allocSize == 0)
 	{
+		fprintf(stderr, "IOSurfaceCreate fail=bad-size w=%u h=%u bpe=%u bpr=%u alloc=%u errno=%d\n",
+			width, height, bytesPerElement, bytesPerRow, allocSize, errno);
+		fflush(stderr);
 		[self release];
 		return nil;
 	}
@@ -229,29 +233,37 @@ static IOSurface* surface_from_shm(uint32_t surfaceID)
 	surfaceID = darling_surface_id();
 	if (surfaceID == 0)
 	{
+		fprintf(stderr, "IOSurfaceCreate fail=id w=%u h=%u errno=%d\n", width, height, errno);
+		fflush(stderr);
 		[self release];
 		return nil;
 	}
-	snprintf(name, sizeof(name), "/darling-iosurf-%u", surfaceID);
-	fd = shm_open(name, O_CREAT | O_RDWR, 0666);
+	snprintf(name, sizeof(name), "/tmp/darling-iosurf-%u", surfaceID);
+	fd = open(name, O_CREAT | O_RDWR, 0666);
 	if (fd < 0)
 	{
+		fprintf(stderr, "IOSurfaceCreate fail=shm_open name=%s errno=%d\n", name, errno);
+		fflush(stderr);
 		[self release];
 		return nil;
 	}
 	mapLength = 4096u + allocSize;
 	if (ftruncate(fd, (off_t)mapLength) != 0)
 	{
+		fprintf(stderr, "IOSurfaceCreate fail=ftruncate len=%zu errno=%d\n", mapLength, errno);
+		fflush(stderr);
 		close(fd);
-		shm_unlink(name);
+		unlink(name);
 		[self release];
 		return nil;
 	}
 	mapping = mmap(NULL, mapLength, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (mapping == MAP_FAILED)
 	{
+		fprintf(stderr, "IOSurfaceCreate fail=mmap len=%zu errno=%d\n", mapLength, errno);
+		fflush(stderr);
 		close(fd);
-		shm_unlink(name);
+		unlink(name);
 		[self release];
 		return nil;
 	}
@@ -280,11 +292,15 @@ static IOSurface* surface_from_shm(uint32_t surfaceID)
 	free(response);
 	if (created == nil)
 	{
+		fprintf(stderr, "IOSurfaceCreate fail=response id=%u errno=%d\n", surfaceID, errno);
+		fflush(stderr);
 		munmap(mapping, mapLength);
 		close(fd);
-		shm_unlink(name);
+		unlink(name);
 		return nil;
 	}
+	fprintf(stderr, "IOSurfaceCreate ok id=%u %ux%u alloc=%u\n", surfaceID, width, height, allocSize);
+	fflush(stderr);
 	impl = (ImplData*)created->_impl;
 	impl->shmfd = fd;
 	impl->mapLength = mapLength;

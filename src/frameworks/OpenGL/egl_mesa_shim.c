@@ -961,9 +961,21 @@ const EGLint *filter_ctx_attribs(const EGLint *attrib)
 
 __attribute__((naked)) static void glvnd_hook(void)
 {
+	/*
+	 * Chromium tail-calls this export, so RSP is 16-byte aligned on
+	 * entry (the return address is already the only thing on the stack).
+	 * A normal call arrives 8-byte aligned. andq $-16 keeps the call to
+	 * filter_ctx_attribs aligned in both cases.
+	 *
+	 * Continue is the instruction after the overwritten prologue
+	 * (`mov %rsp, %rbp`), so the thunk pushes rbp first. The call
+	 * enters that thunk at RSP ≡ 8 for both entry alignments.
+	 */
 	__asm__ volatile(
 		"endbr64\n"
 		"push %rbp\n"
+		"mov %rsp, %rbp\n"
+		"and $-16, %rsp\n"
 		"push %rdi\n"
 		"push %rsi\n"
 		"push %rdx\n"
@@ -979,6 +991,21 @@ __attribute__((naked)) static void glvnd_hook(void)
 		"pop %rsi\n"
 		"pop %rdi\n"
 		"mov %rax, %rcx\n"
+		"mov %rbp, %rsp\n"
+		"pop %rbp\n"
+		/* The patched export skipped endbr/push rbp/mov slot. Continue
+		 * is `mov %rsp, %rbp` and needs that push already done, with
+		 * the frame 16-byte aligned. Call a thunk that does the push
+		 * so both a normal call and a tail call enter it at RSP ≡ 8. */
+		"push %rbp\n"
+		"mov %rsp, %rbp\n"
+		"and $-16, %rsp\n"
+		"call 2f\n"
+		"mov %rbp, %rsp\n"
+		"pop %rbp\n"
+		"ret\n"
+		"2:\n"
+		"push %rbp\n"
 		"mov _glvnd_slot(%rip), %rax\n"
 		"mov (%rax), %rax\n"
 		"jmp *_glvnd_continue(%rip)\n"
